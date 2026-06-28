@@ -128,7 +128,7 @@ export default function ClaimDbConfigPage() {
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
       if (looksLikeGarbledText(row.description) || looksLikeGarbledText(row.resolution)) {
-        return `พบตัวอักษรผิดพลาดในบรรทัด ${index + 1} ของไฟล์ search_c.xlsx กรุณาตรวจสอบ encoding ก่อนนำเข้า`;
+        return `พบตัวอักษรผิดพลาดในบรรทัด ${index + 1} ของไฟล์ Errcode_CSOP กรุณาตรวจสอบ encoding ก่อนนำเข้า`;
       }
     }
     return null;
@@ -170,7 +170,7 @@ export default function ClaimDbConfigPage() {
     }
   }, []);
 
-  /** Import xlsx → parse 3 columns (code, description, resolution) → bulk upsert ลง csop_error */
+  /** Import xlsx (Errcode_CSOP_*.xlsx จริง — 2 คอลัมน์: Errcode, Errdesc) → bulk upsert ลง csop_error */
   const handleImportFile = async (file: File) => {
     setImporting(true);
     setImportResult(null);
@@ -180,22 +180,24 @@ export default function ClaimDbConfigPage() {
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, blankrows: false });
 
-      // skip header row — first cell มักเป็น "รหัส C/Deny/Verify"
-      const dataRows: EclaimErrorCode[] = [];
+      // skip header row — first cell มักเป็น "Errcode" (ไฟล์จริง) หรือ "รหัส .../Code" (ไฟล์รูปแบบเก่า)
+      // ไฟล์จริงของ บก. มีรหัสซ้ำกันบางตัว (เช่น C00, L02) — เก็บแค่รายการล่าสุดของแต่ละรหัส กัน ON CONFLICT ชนกันเอง
+      const byCode = new Map<string, EclaimErrorCode>();
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i] ?? [];
         const codeRaw = r[0];
         if (codeRaw === null || codeRaw === undefined || codeRaw === '') continue;
         const code = String(codeRaw).trim();
         // ข้าม header
-        if (/รหัส|^Code$/i.test(code)) continue;
+        if (/รหัส|^code$|^errcode$/i.test(code)) continue;
         const desc = r[1] != null ? String(r[1]).trim() : null;
         const reso = r[2] != null ? String(r[2]).trim() : null;
-        dataRows.push({ code, description: desc, resolution: reso });
+        byCode.set(code, { code, description: desc, resolution: reso });
       }
+      const dataRows: EclaimErrorCode[] = [...byCode.values()];
 
       if (dataRows.length === 0) {
-        setImportResult({ ok: false, message: 'ไม่พบข้อมูลในไฟล์ (ต้องมีคอลัมน์: รหัส | รายละเอียด | แนวทางแก้ไข)' });
+        setImportResult({ ok: false, message: 'ไม่พบข้อมูลในไฟล์ (ต้องมีคอลัมน์: Errcode | Errdesc)' });
         return;
       }
 
@@ -563,7 +565,7 @@ export default function ClaimDbConfigPage() {
         </div>
 
         <p className="text-xs text-gray-500">
-          อัปโหลดไฟล์ .xlsx ที่มี 3 คอลัมน์: <strong>รหัส | รายละเอียด | แนวทางแก้ไข</strong> —
+          อัปโหลดไฟล์ <strong>Errcode_CSOP_*.xlsx</strong> (ไฟล์จริงจากกรมบัญชีกลาง — 2 คอลัมน์: <strong>Errcode | Errdesc</strong>) —
           ระบบจะแทนข้อมูลเดิมทั้งหมดด้วย list ใหม่ (replace mode)
         </p>
 
@@ -592,7 +594,7 @@ export default function ClaimDbConfigPage() {
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
           >
             {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            เลือกไฟล์ search_c.xlsx
+            เลือกไฟล์ Errcode_CSOP_*.xlsx
           </button>
           {!csopTablesStatus?.csop_error && (
             <span className="text-xs text-amber-600">ต้องสร้างตาราง csop_error ก่อน (กดปุ่ม "สร้างตาราง" ด้านบน)</span>

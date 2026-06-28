@@ -1021,7 +1021,10 @@ export async function claimQueryRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
     }
-    const { rows, replace } = parsed.data;
+    // ไฟล์ต้นทางอาจมีรหัสซ้ำกัน (เก็บแค่รายการล่าสุดของแต่ละ code) กัน ON CONFLICT ชนกันเองในชุดเดียวกัน
+    const dedupedRows = [...new Map(parsed.data.rows.map((r) => [r.code, r])).values()];
+    const { replace } = parsed.data;
+    const rows = dedupedRows;
 
     let pool: CachedPool;
     try { pool = await openClaimPool(auth.hospitalId); }
@@ -1091,7 +1094,10 @@ export async function claimQueryRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
     }
-    const { rows, replace } = parsed.data;
+    // ไฟล์ต้นทางอาจมีรหัสซ้ำกัน (เก็บแค่รายการล่าสุดของแต่ละ code) กัน ON CONFLICT ชนกันเองในชุดเดียวกัน
+    const dedupedRows = [...new Map(parsed.data.rows.map((r) => [r.code, r])).values()];
+    const { replace } = parsed.data;
+    const rows = dedupedRows;
 
     let pool: CachedPool;
     try { pool = await openClaimPool(auth.hospitalId); }
