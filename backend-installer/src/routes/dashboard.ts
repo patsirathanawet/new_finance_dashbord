@@ -50,7 +50,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       : await prisma.$queryRaw<Row[]>`SELECT * FROM v_claim16_summary_by_hospital WHERE hospital_code = ${auth.hospitalCode}`;
 
     // Convert BigInt → number, NUMERIC → number for JSON
-    return rows.map((r) => ({
+    return rows.map((r: Row) => ({
       hospitalId: r.hospital_id,
       hospitalCode: r.hospital_code,
       hospitalName: r.hospital_name,

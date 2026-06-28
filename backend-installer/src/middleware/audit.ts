@@ -28,7 +28,7 @@ export function audit(request: FastifyRequest, input: AuditInput): void {
         metadata: input.metadata ? (input.metadata as object) : undefined,
       },
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       request.log.warn({ err }, 'audit log write failed');
     });
 }
