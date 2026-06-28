@@ -731,16 +731,113 @@ CREATE TABLE IF NOT EXISTS aipn_error (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 `;
 
-export const AIPN_TABLES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error'] as const;
+/**
+ * aipn_stm — เอกสารตอบกลับ "ใบแจ้งยอดเงินที่เบิกได้" (STM) ของ AIPN
+ * โครงสร้างจาก SIGNSTMM/SIGNSTMS.xml จริง: stmdat (เลขที่ใบแจ้ง/งวด/วันครบกำหนด)
+ * + รายการ <Bill> ต่อ AN — ทำเป็นตารางเดียว (denormalize header ลงทุกแถว เพราะไม่มีตารางหัวแยก)
+ */
+const PG_DDL_AIPN_STM = `
+CREATE TABLE IF NOT EXISTS aipn_stm (
+  id            BIGSERIAL PRIMARY KEY,
+  stm_no        VARCHAR(30) NOT NULL,        -- stmno เช่น 11304MT6905 / 11304ST6905
+  stm_type      VARCHAR(5),                  -- M = หลัก, S = เพิ่มเติม (จากชื่อไฟล์ SIGNSTMM/SIGNSTMS)
+  hospital_code VARCHAR(10),                 -- hcode ของ stmdat
+  period        VARCHAR(10),                 -- period เช่น 6905 (พ.ศ.+เดือน)
+  period_desc   VARCHAR(50),                 -- เช่น "พฤษภาคม  2569"
+  date_due      VARCHAR(50),                 -- dateDue (ข้อความวันที่ไทย ไม่แปลงเป็น date)
+  hmain         VARCHAR(10),
+  bill_hcode    VARCHAR(10),                 -- hcode ของ Bill (รพ.ที่ให้บริการ)
+  hproc         VARCHAR(10),
+  hn            VARCHAR(30),
+  an            VARCHAR(30),
+  pid           VARCHAR(20),
+  patient_name  VARCHAR(200),
+  date_adm      DATE,
+  date_disch    DATE,
+  ft            VARCHAR(5),
+  bf            VARCHAR(5),
+  drg           VARCHAR(20),
+  rw            NUMERIC(10,4),
+  adjrw         NUMERIC(10,4),
+  due           VARCHAR(10),
+  ptype         VARCHAR(10),
+  rwtype        VARCHAR(10),
+  rptype        VARCHAR(10),
+  rid           VARCHAR(20),
+  pstm          VARCHAR(10),
+  careas        VARCHAR(5),
+  sc            VARCHAR(10),
+  ed            VARCHAR(10),
+  reimb         NUMERIC(15,2),               -- ยอดเงินที่เบิกได้
+  nreimb        NUMERIC(15,2),
+  copay         NUMERIC(15,2),
+  cp            VARCHAR(10),
+  pp            VARCHAR(10),
+  ods           VARCHAR(50),
+  spcmsg        TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_aipn_stm_stm_no ON aipn_stm(stm_no);
+CREATE INDEX IF NOT EXISTS idx_aipn_stm_an ON aipn_stm(an);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_aipn_stm_stmno_an ON aipn_stm(stm_no, an);
+`;
+
+const MYSQL_DDL_AIPN_STM = `
+CREATE TABLE IF NOT EXISTS aipn_stm (
+  id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+  stm_no        VARCHAR(30) NOT NULL,
+  stm_type      VARCHAR(5),
+  hospital_code VARCHAR(10),
+  period        VARCHAR(10),
+  period_desc   VARCHAR(50),
+  date_due      VARCHAR(50),
+  hmain         VARCHAR(10),
+  bill_hcode    VARCHAR(10),
+  hproc         VARCHAR(10),
+  hn            VARCHAR(30),
+  an            VARCHAR(30),
+  pid           VARCHAR(20),
+  patient_name  VARCHAR(200),
+  date_adm      DATE,
+  date_disch    DATE,
+  ft            VARCHAR(5),
+  bf            VARCHAR(5),
+  drg           VARCHAR(20),
+  rw            DECIMAL(10,4),
+  adjrw         DECIMAL(10,4),
+  due           VARCHAR(10),
+  ptype         VARCHAR(10),
+  rwtype        VARCHAR(10),
+  rptype        VARCHAR(10),
+  rid           VARCHAR(20),
+  pstm          VARCHAR(10),
+  careas        VARCHAR(5),
+  sc            VARCHAR(10),
+  ed            VARCHAR(10),
+  reimb         DECIMAL(15,2),
+  nreimb        DECIMAL(15,2),
+  copay         DECIMAL(15,2),
+  cp            VARCHAR(10),
+  pp            VARCHAR(10),
+  ods           VARCHAR(50),
+  spcmsg        TEXT,
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_aipn_stm_stm_no (stm_no),
+  INDEX idx_aipn_stm_an (an),
+  UNIQUE KEY uq_aipn_stm_stmno_an (stm_no, an)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+export const AIPN_TABLES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error', 'aipn_stm'] as const;
 export type AipnTableName = (typeof AIPN_TABLES)[number];
 
-/** สร้าง aipn_rep_head + aipn_rep_head_detail + aipn_error ในฐานข้อมูลปลายทาง — idempotent */
+/** สร้าง aipn_rep_head + aipn_rep_head_detail + aipn_error + aipn_stm ในฐานข้อมูลปลายทาง — idempotent */
 export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesResult> {
   const created: string[] = [];
   try {
-    const [headDdl, detailDdl, errorDdl] = cached.type === 'postgresql'
-      ? [PG_DDL_AIPN_REP_HEAD, PG_DDL_AIPN_REP_HEAD_DETAIL, PG_DDL_AIPN_ERROR]
-      : [MYSQL_DDL_AIPN_REP_HEAD, MYSQL_DDL_AIPN_REP_HEAD_DETAIL, MYSQL_DDL_AIPN_ERROR];
+    const [headDdl, detailDdl, errorDdl, stmDdl] = cached.type === 'postgresql'
+      ? [PG_DDL_AIPN_REP_HEAD, PG_DDL_AIPN_REP_HEAD_DETAIL, PG_DDL_AIPN_ERROR, PG_DDL_AIPN_STM]
+      : [MYSQL_DDL_AIPN_REP_HEAD, MYSQL_DDL_AIPN_REP_HEAD_DETAIL, MYSQL_DDL_AIPN_ERROR, MYSQL_DDL_AIPN_STM];
 
     for (const stmt of splitStatements(headDdl)) {
       await runQuery(cached, stmt);
@@ -757,6 +854,11 @@ export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesR
     }
     created.push('aipn_error');
 
+    for (const stmt of splitStatements(stmDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('aipn_stm');
+
     return { ok: true, created };
   } catch (err) {
     return {
@@ -767,9 +869,11 @@ export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesR
   }
 }
 
-/** ตรวจว่า aipn_rep_head + aipn_rep_head_detail + aipn_error มีอยู่ใน target DB หรือไม่ */
+/** ตรวจว่า aipn_rep_head + aipn_rep_head_detail + aipn_error + aipn_stm มีอยู่ใน target DB หรือไม่ */
 export async function checkAipnTables(cached: CachedPool): Promise<Record<AipnTableName, boolean>> {
-  const result: Record<AipnTableName, boolean> = { aipn_rep_head: false, aipn_rep_head_detail: false, aipn_error: false };
+  const result: Record<AipnTableName, boolean> = {
+    aipn_rep_head: false, aipn_rep_head_detail: false, aipn_error: false, aipn_stm: false,
+  };
   for (const t of AIPN_TABLES) {
     try {
       const sql = cached.type === 'postgresql'

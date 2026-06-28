@@ -343,8 +343,8 @@ export async function createAipnTables(): Promise<CreateTablesResult> {
   return res.data;
 }
 
-export async function checkAipnTables(): Promise<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean }> {
-  const res = await getBackend().get<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean }>('/claim-db-config/check-aipn-tables');
+export async function checkAipnTables(): Promise<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean; aipn_stm: boolean }> {
+  const res = await getBackend().get<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean; aipn_stm: boolean }>('/claim-db-config/check-aipn-tables');
   return res.data;
 }
 

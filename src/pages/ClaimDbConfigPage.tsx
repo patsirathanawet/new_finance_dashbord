@@ -85,7 +85,7 @@ function TablesStatusGrid<T extends string>({ status, tables }: { status: Record
 
 const CSOP_TABLE_NAMES = ['csop_rep_head', 'csop_rep_head_detail', 'csop_error'] as const;
 const SSOP_TABLE_NAMES = ['ssop_rep_head', 'ssop_rep_detail'] as const;
-const AIPN_TABLE_NAMES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error'] as const;
+const AIPN_TABLE_NAMES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error', 'aipn_stm'] as const;
 
 export default function ClaimDbConfigPage() {
   const isAdmin = useSessionStore((s) => s.isAdmin);
