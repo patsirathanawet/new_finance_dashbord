@@ -241,32 +241,40 @@ export default function ClaimDbConfigPage() {
     }
   };
 
-  /** Import xlsx (error_aipn — 3 คอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข) → bulk insert (skip ถ้ามีอยู่แล้ว) ลง aipn_error */
+/** Import error_aipn — รับได้ทั้ง .pdf (aipnedcode.pdf ตัวจริงจาก สปส.) และ .xlsx (3 คอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข) → bulk insert (skip ถ้ามีอยู่แล้ว) ลง aipn_error */
   const handleImportAipnFile = async (file: File) => {
     setImportingAipn(true);
     setImportAipnResult(null);
     try {
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', codepage: 874 });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, blankrows: false });
+      const isPdf = /\.pdf$/i.test(file.name);
 
-      const byCode = new Map<string, EclaimErrorCode>();
-      for (let i = 0; i < rows.length; i++) {
-        const r = rows[i] ?? [];
-        const codeRaw = r[0];
-        if (codeRaw === null || codeRaw === undefined || codeRaw === '') continue;
-        const code = String(codeRaw).trim();
-        // ข้าม header
-        if (/รหัส|^code$|^edcode$/i.test(code)) continue;
-        const desc = r[1] != null ? String(r[1]).trim() : null;
-        const reso = r[2] != null ? String(r[2]).trim() : null;
-        byCode.set(code, { code, description: desc, resolution: reso });
+      let dataRows: EclaimErrorCode[];
+      if (isPdf) {
+        const { parseAipnErrorPdf } = await import('../lib/aipnErrorPdfParser');
+        dataRows = await parseAipnErrorPdf(buf);
+      } else {
+        const wb = XLSX.read(new Uint8Array(buf), { type: 'array', codepage: 874 });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, blankrows: false });
+
+        const byCode = new Map<string, EclaimErrorCode>();
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i] ?? [];
+          const codeRaw = r[0];
+          if (codeRaw === null || codeRaw === undefined || codeRaw === '') continue;
+          const code = String(codeRaw).trim();
+          // ข้าม header
+          if (/รหัส|^code$|^edcode$/i.test(code)) continue;
+          const desc = r[1] != null ? String(r[1]).trim() : null;
+          const reso = r[2] != null ? String(r[2]).trim() : null;
+          byCode.set(code, { code, description: desc, resolution: reso });
+        }
+        dataRows = [...byCode.values()];
       }
-      const dataRows: EclaimErrorCode[] = [...byCode.values()];
 
       if (dataRows.length === 0) {
-        setImportAipnResult({ ok: false, message: 'ไม่พบข้อมูลในไฟล์ (ต้องมีคอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข)' });
+        setImportAipnResult({ ok: false, message: 'ไม่พบข้อมูลในไฟล์ (รองรับ .pdf ตัวจริงจาก สปส. หรือ .xlsx คอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข)' });
         return;
       }
 
@@ -643,7 +651,8 @@ export default function ClaimDbConfigPage() {
 
         <p className="text-xs text-gray-500">
           <strong>error_csop</strong> — ไฟล์จริงจากกรมบัญชีกลาง 2 คอลัมน์: <strong>Errcode | Errdesc</strong> ·{' '}
-          <strong>error_aipn</strong> — ไฟล์ .xlsx 3 คอลัมน์: <strong>รหัส | คำอธิบาย | วิธีแก้ไข</strong> —
+          <strong>error_aipn</strong> — รับได้ทั้ง <strong>.pdf ตัวจริงจาก สปส.</strong> (เช่น aipnedcode.pdf) หรือ{' '}
+          <strong>.xlsx</strong> 3 คอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข —
           รหัสที่มีอยู่แล้วในตารางจะถูก<strong>ข้าม</strong> ส่วนรหัสที่ยังไม่มีจะถูกเพิ่มเข้าไปใหม่
         </p>
 
@@ -678,7 +687,7 @@ export default function ClaimDbConfigPage() {
           <input
             ref={aipnFileInputRef}
             type="file"
-            accept=".xlsx,.xls"
+            accept=".pdf,.xlsx,.xls"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
