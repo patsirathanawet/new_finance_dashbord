@@ -1,0 +1,403 @@
+// Prisma schema — SQLite edition (for offline installer)
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+  viewer
+
+  @@map("user_role")
+}
+
+enum Claim16Source {
+  file_upload
+  hosxp_fetch
+
+  @@map("claim16_source")
+}
+
+enum ImportJobStatus {
+  pending
+  running
+  success
+  failed
+  cancelled
+
+  @@map("import_job_status")
+}
+
+enum HosxpDbType {
+  mysql
+  postgresql
+
+  @@map("hosxp_db_type")
+}
+
+enum SsopRepLineStatus {
+  passed
+  failed
+
+  @@map("ssop_rep_line_status")
+}
+
+enum SsopRepDrugLineKind {
+  prescription
+  drug_item
+
+  @@map("ssop_rep_drug_line_kind")
+}
+
+model Hospital {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  province  String?
+  district  String?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  users          User[]
+  claim16Records Claim16Record[]
+  repRecords     RepRecord[]
+  stmRecords     StmRecord[]
+  importJobs     ImportJob[]
+  auditLogs      AuditLog[]
+  dbConfigs      HospitalDbConfig[]
+  ssopRepBatches SsopRepBatch[]
+
+  @@map("hospitals")
+}
+
+model User {
+  id          String    @id @default(uuid())
+  hospitalId  String    @map("hospital_id")
+  bmsUserKey  String?   @map("bms_user_key")
+  name        String
+  email       String?
+  role        UserRole  @default(user)
+  isActive    Boolean   @default(true) @map("is_active")
+  lastLoginAt DateTime? @map("last_login_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  hospital         Hospital           @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  claim16Records   Claim16Record[]
+  repRecords       RepRecord[]
+  stmRecords       StmRecord[]
+  importJobs       ImportJob[]
+  auditLogs        AuditLog[]
+  dbConfigsUpdated HospitalDbConfig[]
+  ssopRepBatches   SsopRepBatch[]
+
+  @@unique([hospitalId, bmsUserKey], map: "uq_users_hospital_bms")
+  @@index([hospitalId], map: "idx_users_hospital")
+  @@index([bmsUserKey], map: "idx_users_bms_key")
+  @@map("users")
+}
+
+model Claim16Record {
+  id               String  @id @default(uuid())
+  hospitalId       String  @map("hospital_id")
+  uploadedByUserId String? @map("uploaded_by_user_id")
+
+  source       Claim16Source @default(file_upload)
+  fileName     String        @map("file_name")
+  hospitalCode String        @map("hospital_code")
+
+  totalRows    Int @default(0) @map("total_rows")
+  fileCount    Int @default(0) @map("file_count")
+  errorCount   Int @default(0) @map("error_count")
+  warningCount Int @default(0) @map("warning_count")
+
+  isValidated Boolean   @default(false) @map("is_validated")
+  importedAt  DateTime? @map("imported_at")
+
+  rawData          Json    @map("raw_data")
+  contentHash      String? @map("content_hash")
+  summary          Json?
+  validationIssues Json    @default("[]") @map("validation_issues")
+
+  dateFrom DateTime? @map("date_from")
+  dateTo   DateTime? @map("date_to")
+
+  uploadedByName String?   @map("uploaded_by_name")
+  uploadedAt     DateTime  @default(now()) @map("uploaded_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  hospital       Hospital    @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  uploadedByUser User?       @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  importJobs     ImportJob[]
+
+  @@map("claim16_records")
+}
+
+model HospitalDbConfig {
+  id         String @id @default(uuid())
+  hospitalId String @map("hospital_id")
+
+  dbType            HosxpDbType @map("db_type")
+  host              String
+  port              Int
+  databaseName      String      @map("database_name")
+  username          String
+  passwordEncrypted String      @map("password_encrypted")
+  requiredTables    Json        @default("[]") @map("required_tables")
+
+  lastTestedAt    DateTime? @map("last_tested_at")
+  lastTestStatus  String?   @map("last_test_status")
+  lastTestMessage String?   @map("last_test_message")
+
+  updatedByUserId String? @map("updated_by_user_id")
+  updatedByName   String? @map("updated_by_name")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  hospital      Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  updatedByUser User?    @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([hospitalId], map: "idx_db_config_hospital")
+  @@map("hospital_db_configs")
+}
+
+model ClaimDbConfig {
+  id         String @id @default(uuid())
+  hospitalId String @map("hospital_id")
+
+  dbType            HosxpDbType @map("db_type")
+  host              String
+  port              Int
+  databaseName      String      @map("database_name")
+  username          String
+  passwordEncrypted String      @map("password_encrypted")
+
+  lastTestedAt    DateTime? @map("last_tested_at")
+  lastTestStatus  String?   @map("last_test_status")
+  lastTestMessage String?   @map("last_test_message")
+
+  tablesCreatedAt DateTime? @map("tables_created_at")
+  tablesCreatedBy String?   @map("tables_created_by")
+
+  updatedByUserId String? @map("updated_by_user_id")
+  updatedByName   String? @map("updated_by_name")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([hospitalId], map: "idx_claim_db_configs_hospital")
+  @@map("claim_db_configs")
+}
+
+model RepRecord {
+  id               String  @id @default(uuid())
+  hospitalId       String  @map("hospital_id")
+  uploadedByUserId String? @map("uploaded_by_user_id")
+
+  fileName     String  @map("file_name")
+  hospitalCode String  @map("hospital_code")
+  fundType     String? @map("fund_type")
+  businessKey  String? @map("business_key")
+
+  totalRows Int   @default(0) @map("total_rows")
+  rawData   Json  @map("raw_data")
+  summary   Json?
+
+  uploadedByName String?   @map("uploaded_by_name")
+  uploadedAt     DateTime  @default(now()) @map("uploaded_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  hospital       Hospital @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  uploadedByUser User?    @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@map("rep_records")
+}
+
+model StmRecord {
+  id               String  @id @default(uuid())
+  hospitalId       String  @map("hospital_id")
+  uploadedByUserId String? @map("uploaded_by_user_id")
+
+  fileName     String  @map("file_name")
+  hospitalCode String  @map("hospital_code")
+  fundType     String? @map("fund_type")
+  businessKey  String? @map("business_key")
+
+  totalRows Int   @default(0) @map("total_rows")
+  rawData   Json  @map("raw_data")
+  summary   Json?
+
+  uploadedByName String?   @map("uploaded_by_name")
+  uploadedAt     DateTime  @default(now()) @map("uploaded_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  hospital       Hospital @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  uploadedByUser User?    @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@map("stm_records")
+}
+
+// เอกสารตอบกลับจาก สปสค. (SOCDBMN/SOCDDMN .BIL) — งวดส่งเบิก OPD สิทธิประกันสังคม
+model SsopRepBatch {
+  id               String  @id @default(uuid())
+  hospitalId       String  @map("hospital_id")
+  uploadedByUserId String? @map("uploaded_by_user_id")
+
+  docType          String   @default("OPD_BILL") @map("doc_type")
+  ackNo            String   @map("ack_no")
+  hospitalCode     String   @map("hospital_code")
+  mainHospitalCode String   @map("main_hospital_code")
+  mainHospitalName String?  @map("main_hospital_name")
+  batchRef         String   @map("batch_ref")
+  station          String?
+  ackAt            DateTime @map("ack_at")
+
+  totalSent   Int @default(0) @map("total_sent")
+  totalPassed Int @default(0) @map("total_passed")
+  totalFailed Int @default(0) @map("total_failed")
+
+  bmnFileName String  @map("bmn_file_name")
+  dmnFileName String? @map("dmn_file_name")
+  zipFileName String? @map("zip_file_name")
+  contentHash String? @map("content_hash")
+  bmnRawText  String  @map("bmn_raw_text")
+  dmnRawText  String? @map("dmn_raw_text")
+
+  uploadedByName String?   @map("uploaded_by_name")
+  uploadedAt     DateTime  @default(now()) @map("uploaded_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  hospital       Hospital           @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  uploadedByUser User?              @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+  claimLines     SsopRepClaimLine[]
+
+  @@unique([hospitalId, ackNo], map: "uq_ssop_rep_batches_hospital_ack")
+  @@index([hospitalId], map: "idx_ssop_rep_batches_hospital")
+  @@index([contentHash], map: "idx_ssop_rep_batches_content_hash")
+  @@map("ssop_rep_batches")
+}
+
+// รายการเบิกรายบุคคลในงวด (บรรทัด "*|" ของไฟล์ BMN)
+model SsopRepClaimLine {
+  id      String @id @default(uuid())
+  batchId String @map("batch_id")
+
+  lineNo     Int
+  status     SsopRepLineStatus
+  station    String?
+  hcode      String
+  hmain      String
+  authCode   String            @map("auth_code")
+  dtTran     DateTime          @map("dt_tran")
+  invNo      String            @map("inv_no")
+  pid        String
+  bp         String?
+  amount     Float
+  claimAmt   Float             @map("claim_amt")
+  checkCodes Json              @default("[]") @map("check_codes")
+  rawLine    String            @map("raw_line")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  batch     SsopRepBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  drugLines SsopRepDrugLine[]
+
+  @@unique([batchId, lineNo], map: "uq_ssop_rep_claim_lines_batch_line")
+  @@index([invNo], map: "idx_ssop_rep_claim_lines_inv_no")
+  @@index([pid], map: "idx_ssop_rep_claim_lines_pid")
+  @@map("ssop_rep_claim_lines")
+}
+
+// รายละเอียดใบสั่งยา/รายการยาที่ตรวจไม่ผ่าน (บรรทัด "*|" และ "=|" ของไฟล์ DMN)
+model SsopRepDrugLine {
+  id          String              @id @default(uuid())
+  claimLineId String              @map("claim_line_id")
+  kind        SsopRepDrugLineKind
+
+  seqNo           Int?    @map("seq_no")
+  errorCodes      Json    @default("[]") @map("error_codes")
+  invNo           String? @map("inv_no")
+  rxNo            String? @map("rx_no")
+  pid             String?
+  drugId          String? @map("drug_id")
+  drugName        String? @map("drug_name")
+  qty             Float?
+  unitPrice       Float?  @map("unit_price")
+  amount          Float?
+  claimAmt        Float?  @map("claim_amt")
+  drugCatalogCode String? @map("drug_catalog_code")
+
+  rawFields Json   @default("[]") @map("raw_fields")
+  rawLine   String @map("raw_line")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  claimLine SsopRepClaimLine @relation(fields: [claimLineId], references: [id], onDelete: Cascade)
+
+  @@index([claimLineId], map: "idx_ssop_rep_drug_lines_claim_line")
+  @@map("ssop_rep_drug_lines")
+}
+
+model ImportJob {
+  id                String  @id @default(uuid())
+  hospitalId        String  @map("hospital_id")
+  triggeredByUserId String? @map("triggered_by_user_id")
+
+  jobType String          @map("job_type")
+  status  ImportJobStatus @default(pending)
+
+  dateFrom     DateTime? @map("date_from")
+  dateTo       DateTime? @map("date_to")
+  pttypeFilter String?   @map("pttype_filter")
+  params       Json?
+
+  resultRecordId String? @map("result_record_id")
+  rowsFetched    Int?    @map("rows_fetched")
+  errorMessage   String? @map("error_message")
+
+  startedAt  DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  hospital        Hospital       @relation(fields: [hospitalId], references: [id], onDelete: Restrict)
+  triggeredByUser User?          @relation(fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  resultRecord    Claim16Record? @relation(fields: [resultRecordId], references: [id], onDelete: SetNull)
+
+  @@map("import_jobs")
+}
+
+model AuditLog {
+  id         BigInt  @id @default(autoincrement())
+  userId     String? @map("user_id")
+  hospitalId String? @map("hospital_id")
+
+  action     String
+  targetType String? @map("target_type")
+  targetId   String? @map("target_id")
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+  metadata  Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  hospital Hospital? @relation(fields: [hospitalId], references: [id], onDelete: SetNull)
+
+  @@map("audit_log")
+}
