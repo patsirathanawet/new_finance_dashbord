@@ -398,7 +398,7 @@ export default function EclaimFundDashboardRoute() {
 
 function Dashboard({ fund }: { fund: FundMeta }) {
   const FundIcon = fund.icon;
-  const isSSS = fund.code === 'SSS';
+  const isSsopFund = fund.code === 'SSOP';
   const [selectedRepNo, setSelectedRepNo] = useState<string | null>(null);
   const [selectedAckNo, setSelectedAckNo] = useState<string | null>(null);
 
@@ -457,7 +457,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
       const r = await listSsopRepBatches({ startDate: startDateSQL, endDate: endDateSQL }, 200, 0);
       return r.items;
     },
-    enabled: isSSS && Boolean(startDateSQL && endDateSQL),
+    enabled: isSsopFund && Boolean(startDateSQL && endDateSQL),
     retry: false,
   });
   const ssopError = ssopQueryError instanceof Error ? ssopQueryError.message : null;
@@ -466,12 +466,12 @@ function Dashboard({ fund }: { fund: FundMeta }) {
   const { data: ssopSummary } = useQuery<ClaimSummary>({
     queryKey: ['ssopRepSummary', startDateSQL, endDateSQL],
     queryFn: async () => getSsopRepSummary({ startDate: startDateSQL, endDate: endDateSQL }),
-    enabled: isSSS && Boolean(startDateSQL && endDateSQL),
+    enabled: isSsopFund && Boolean(startDateSQL && endDateSQL),
     retry: false,
   });
   // หน้า SSS: รวมยอด ssop_rep เข้ากับยอด rep_head เดิมที่ KPI การ์ดบนสุดเลย ไม่แยกแถวใหม่
   const displaySummary = useMemo<ClaimSummary | null>(() => {
-    if (!isSSS) return summary;
+    if (!isSsopFund) return summary;
     if (!summary && !ssopSummary) return null;
     const s = summary ?? { batches: 0, submitted: 0, passed: 0, failed: 0, passedAmount: 0, failedAmount: 0, totalAmount: 0 };
     const o = ssopSummary ?? { batches: 0, submitted: 0, passed: 0, failed: 0, passedAmount: 0, failedAmount: 0, totalAmount: 0 };
@@ -484,7 +484,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
       failedAmount: s.failedAmount + o.failedAmount,
       totalAmount: s.totalAmount + o.totalAmount,
     };
-  }, [isSSS, summary, ssopSummary]);
+  }, [isSsopFund, summary, ssopSummary]);
 
   const toggleErrorRow = async (code: string) => {
     // ถ้ากด code เดิม → ย่อ
@@ -690,7 +690,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
 
       {/* SSOP REP batches (ssop_rep_head) — เฉพาะหน้า SSS เท่านั้น ต่อจากตาราง rep_head เดิม
           (ยอดรวมเข้ากับ KPI การ์ดบนสุดแล้วผ่าน displaySummary — ตรงนี้แสดงแค่ตารางรายเอกสาร) */}
-      {isSSS && (
+      {isSsopFund && (
       <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">เอกสารตอบรับ สปส. (ssop_rep_head)</h3>

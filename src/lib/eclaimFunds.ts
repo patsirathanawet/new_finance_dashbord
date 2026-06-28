@@ -6,7 +6,7 @@
  *  - colorBg/colorText: Tailwind class (hardcoded เพื่อกัน purge)
  */
 import type { LucideIcon } from 'lucide-react';
-import { ShieldCheck, Landmark, Building, GraduationCap, Zap } from 'lucide-react';
+import { ShieldCheck, Landmark, Building, GraduationCap, Zap, BedDouble } from 'lucide-react';
 
 export interface FundMeta {
   slug: string;
@@ -21,12 +21,21 @@ export interface FundMeta {
 export const ECLAIM_FUNDS: Record<string, FundMeta> = {
   'ofc-direct': {
     slug: 'ofc-direct',
-    code: 'OFC',
-    name: 'สิทธิเบิกจ่ายตรง',
-    description: 'กรมบัญชีกลาง — สวัสดิการข้าราชการ (CSMBS)',
+    code: 'CSOP',
+    name: 'สิทธิข้าราชการผู้ป่วยนอก',
+    description: 'กรมบัญชีกลาง — สวัสดิการข้าราชการ ผู้ป่วยนอก (CSMBS)',
     icon: ShieldCheck,
     iconBg: 'bg-primary-100',
     iconColor: 'text-primary-600',
+  },
+  'cipn': {
+    slug: 'cipn',
+    code: 'CIPN',
+    name: 'สิทธิข้าราชการผู้ป่วยใน',
+    description: 'กรมบัญชีกลาง — สวัสดิการข้าราชการ ผู้ป่วยใน (CSMBS)',
+    icon: BedDouble,
+    iconBg: 'bg-primary-50',
+    iconColor: 'text-primary-700',
   },
   'ofc-local': {
     slug: 'ofc-local',
@@ -39,12 +48,21 @@ export const ECLAIM_FUNDS: Record<string, FundMeta> = {
   },
   'sss': {
     slug: 'sss',
-    code: 'SSS',
-    name: 'สิทธิประกันสังคม',
-    description: 'กองทุนประกันสังคม',
+    code: 'SSOP',
+    name: 'สิทธิประกันสังคมผู้ป่วยนอก',
+    description: 'กองทุนประกันสังคม ผู้ป่วยนอก',
     icon: Building,
     iconBg: 'bg-purple-100',
     iconColor: 'text-purple-600',
+  },
+  'aipn': {
+    slug: 'aipn',
+    code: 'AIPN',
+    name: 'สิทธิประกันสังคมผู้ป่วยใน',
+    description: 'กองทุนประกันสังคม ผู้ป่วยใน',
+    icon: BedDouble,
+    iconBg: 'bg-purple-50',
+    iconColor: 'text-purple-700',
   },
   'bkk': {
     slug: 'bkk',

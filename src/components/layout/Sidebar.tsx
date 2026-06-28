@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Zap,
   Landmark,
+  BedDouble,
   Table,
   FileText,
   Database,
@@ -30,9 +31,11 @@ const FINANCE_ITEMS: NavItem[] = [
 
 const ECLAIM_ITEMS: NavItem[] = [
   { path: '/claims',            label: 'เอกสารเคลม REP/STM',      icon: FileText },
-  { path: '/eclaim/ofc-direct', label: 'สิทธิเบิกจ่ายตรง [OFC]',   icon: ShieldCheck },
+  { path: '/eclaim/ofc-direct', label: 'สิทธิข้าราชการผู้ป่วยนอก [CSOP]', icon: ShieldCheck },
+  { path: '/eclaim/cipn',       label: 'สิทธิข้าราชการผู้ป่วยใน [CIPN]',  icon: BedDouble },
   { path: '/eclaim/ofc-local',  label: 'สิทธิอปท [LGO]',           icon: Landmark },
-  { path: '/eclaim/sss',        label: 'สิทธิประกันสังคม [SSS]',    icon: Building },
+  { path: '/eclaim/sss',        label: 'สิทธิประกันสังคมผู้ป่วยนอก [SSOP]', icon: Building },
+  { path: '/eclaim/aipn',       label: 'สิทธิประกันสังคมผู้ป่วยใน [AIPN]',  icon: BedDouble },
   { path: '/eclaim/bkk',        label: 'สิทธิกทม. [BKK]',           icon: Building },
   { path: '/eclaim/pvt',        label: 'สิทธิครูเอกชน [PVT]',       icon: GraduationCap },
   { path: '/eclaim/srt',        label: 'สิทธิการไฟฟ้า [SRT]',       icon: Zap },

@@ -6,9 +6,12 @@
  *  - GET /api/claim-db/monthly-trend
  *
  *  ทุก endpoint รับ optional ?fundCode= สำหรับ filter
- *    OFC  → invoice_doc LIKE '%CS_%'
- *    OFC2 → invoice_doc LIKE '%LGO%'
- *    SSS  → '%SSS%' / BKK → '%BKK%' / PVT → '%PVT%' / SRT → '%SRT%'
+ *    CSOP → invoice_doc LIKE '%OPCS%'/'%IPCS%'/'%PACS%'/'%INSTCS%' (ข้าราชการ — ข้อมูลเดิมของ OFC ยังแยก OP/IP ไม่ได้)
+ *    CIPN → ยังไม่มีแหล่งข้อมูล (ข้าราชการผู้ป่วยใน) — return ไม่มีรายการ รอเชื่อมข้อมูลอนาคต
+ *    LGO  → invoice_doc LIKE '%LGO%'
+ *    SSOP → '%SSS%' (ประกันสังคม — ข้อมูลเดิมของ SSS ยังแยก OP/IP ไม่ได้)
+ *    AIPN → ยังไม่มีแหล่งข้อมูล (ประกันสังคมผู้ป่วยใน) — return ไม่มีรายการ รอเชื่อมข้อมูลอนาคต
+ *    BKK → '%BKK%' / PVT → '%PVT%' / SRT → '%SRT%'
  */
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -50,10 +53,13 @@ async function openClaimPool(hospitalId: string): Promise<CachedPool> {
 function fundFilter(fundCode: string | undefined): string {
   if (!fundCode) return '';
   const f = fundCode.toUpperCase();
-  // OFC = CSMBS (OPCS/IPCS/PACS); LGO = อปท.; SSS/BKK/PVT/SRT ตามชื่อ
-  if (f === 'OFC') return `AND (invoice_doc LIKE '%OPCS%' OR invoice_doc LIKE '%IPCS%' OR invoice_doc LIKE '%PACS%' OR invoice_doc LIKE '%INSTCS%')`;
+  // CSOP = CSMBS ข้าราชการ (เดิมคือ OFC, ยังแยก OP/IP ไม่ได้จาก invoice_doc); LGO = อปท.; SSOP/BKK/PVT/SRT ตามชื่อ
+  if (f === 'CSOP') return `AND (invoice_doc LIKE '%OPCS%' OR invoice_doc LIKE '%IPCS%' OR invoice_doc LIKE '%PACS%' OR invoice_doc LIKE '%INSTCS%')`;
+  // CIPN/AIPN: ยังไม่มีแหล่งข้อมูลผู้ป่วยในแยกต่างหาก — กัน fallthrough ไปแสดงข้อมูลกองทุนอื่นโดยไม่ตั้งใจ
+  if (f === 'CIPN') return `AND 1=0`;
   if (f === 'LGO') return `AND invoice_doc LIKE '%LGO%'`;
-  if (f === 'SSS') return `AND invoice_doc LIKE '%SSS%'`;
+  if (f === 'SSOP') return `AND invoice_doc LIKE '%SSS%'`;
+  if (f === 'AIPN') return `AND 1=0`;
   if (f === 'BKK') return `AND invoice_doc LIKE '%BKK%'`;
   if (f === 'PVT') return `AND invoice_doc LIKE '%PVT%'`;
   if (f === 'SRT') return `AND invoice_doc LIKE '%SRT%'`;
