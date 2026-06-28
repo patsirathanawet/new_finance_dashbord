@@ -646,8 +646,8 @@ function Dashboard({ fund }: { fund: FundMeta }) {
   const isCsopFund = fund.code === 'CSOP';
   const isAipnFund = fund.code === 'AIPN';
   const isCipnFund = fund.code === 'CIPN';
-  // กองทุนที่มีตารางของตัวเอง (ไม่ใช้ rep_head เดิม) — CSOP/AIPN แทนที่ของเดิมทั้งหมด, CIPN ยังไม่มีตาราง
-  const usesOwnTable = isCsopFund || isAipnFund || isCipnFund;
+  // กองทุนที่มีตารางของตัวเอง (ไม่ใช้ rep_head เดิม) — CSOP/AIPN/SSOP แทนที่ของเดิมทั้งหมด, CIPN ยังไม่มีตาราง
+  const usesOwnTable = isCsopFund || isAipnFund || isSsopFund || isCipnFund;
   const [selectedRepNo, setSelectedRepNo] = useState<string | null>(null);
   const [selectedAckNo, setSelectedAckNo] = useState<string | null>(null);
   const [selectedCsopAckNo, setSelectedCsopAckNo] = useState<string | null>(null);
@@ -758,25 +758,13 @@ function Dashboard({ fund }: { fund: FundMeta }) {
     retry: false,
   });
 
-  // หน้า SSOP: รวมยอด ssop_rep เข้ากับยอด rep_head เดิมที่ KPI การ์ดบนสุดเลย (ของเดิม ไม่เปลี่ยน)
-  // หน้า CSOP/AIPN: ใช้ยอดจากตารางของตัวเองล้วนๆ (แทนที่ rep_head เดิม) — CIPN ยังไม่มีข้อมูล
+  // หน้า CSOP/AIPN/SSOP: ใช้ยอดจากตารางของตัวเองล้วนๆ (แทนที่ rep_head เดิมทั้งหมด) — CIPN ยังไม่มีข้อมูล
   const displaySummary = useMemo<ClaimSummary | null>(() => {
     if (isCsopFund) return csopSummary ?? null;
     if (isAipnFund) return aipnSummary ?? null;
+    if (isSsopFund) return ssopSummary ?? null;
     if (isCipnFund) return null;
-    if (!isSsopFund) return summary;
-    if (!summary && !ssopSummary) return null;
-    const s = summary ?? { batches: 0, submitted: 0, passed: 0, failed: 0, passedAmount: 0, failedAmount: 0, totalAmount: 0 };
-    const o = ssopSummary ?? { batches: 0, submitted: 0, passed: 0, failed: 0, passedAmount: 0, failedAmount: 0, totalAmount: 0 };
-    return {
-      batches: s.batches + o.batches,
-      submitted: s.submitted + o.submitted,
-      passed: s.passed + o.passed,
-      failed: s.failed + o.failed,
-      passedAmount: s.passedAmount + o.passedAmount,
-      failedAmount: s.failedAmount + o.failedAmount,
-      totalAmount: s.totalAmount + o.totalAmount,
-    };
+    return summary;
   }, [isSsopFund, isCsopFund, isAipnFund, isCipnFund, summary, ssopSummary, csopSummary, aipnSummary]);
 
   const toggleErrorRow = async (code: string) => {
@@ -1106,8 +1094,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
         </div>
       )}
 
-      {/* SSOP REP batches (ssop_rep_head) — เฉพาะหน้า SSS เท่านั้น ต่อจากตาราง rep_head เดิม
-          (ยอดรวมเข้ากับ KPI การ์ดบนสุดแล้วผ่าน displaySummary — ตรงนี้แสดงแค่ตารางรายเอกสาร) */}
+      {/* SSOP batches table (ssop_rep_head) — แทนที่ rep_head เดิม */}
       {isSsopFund && (
       <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
