@@ -285,6 +285,62 @@ export interface AipnRepRecord {
   uploadedBy: string;
 }
 
+/** รายการเคลม 1 AN ในใบแจ้งยอดเงินที่เบิกได้ (STM) ของ AIPN — จาก <Bills><Bill> ใน SIGNSTMM/SIGNSTMS.xml */
+export interface AipnStmBill {
+  hmain: string;
+  billHcode: string;
+  hproc: string;
+  hn: string;
+  an: string;
+  pid: string;
+  patientName: string;
+  dateAdm: string | null;
+  dateDisch: string | null;
+  ft: string;
+  bf: string;
+  drg: string;
+  rw: number | null;
+  adjrw: number | null;
+  due: string;
+  ptype: string;
+  rwtype: string;
+  rptype: string;
+  rid: string;
+  pstm: string;
+  careas: string;
+  sc: string;
+  ed: string;
+  reimb: number;
+  nreimb: number;
+  copay: number;
+  cp: string;
+  pp: string;
+  ods: string | null;
+  spcmsg: string | null;
+}
+
+/** ใบแจ้งยอดเงินที่เบิกได้ 1 ชุด (M หรือ S) — จาก <stmdat> ของ SIGNSTMM/SIGNSTMS.xml */
+export interface AipnStmStatement {
+  stmNo: string;
+  stmType: 'M' | 'S';
+  period: string;
+  periodDesc: string;
+  dateDue: string;
+  cases: number;
+  totalAdjrw: number;
+  bills: AipnStmBill[];
+}
+
+export interface AipnStmRecord {
+  id: string;                 // hospitalCode_period
+  hospitalCode: string;
+  period: string;
+  statements: AipnStmStatement[];
+  fileName: string;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
 export type UploadFileType = 'REP' | 'STM';
 
 export interface UploadHistoryItem {

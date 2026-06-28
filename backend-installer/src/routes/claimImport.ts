@@ -75,6 +75,58 @@ const aipnImportSchema = z.object({
 
 type AipnImportPayload = z.infer<typeof aipnImportSchema>;
 
+/** ใบแจ้งยอดเงินที่เบิกได้ (STM) ของ AIPN — จาก SIGNSTMM/SIGNSTMS.xml */
+const aipnStmBillSchema = z.object({
+  hmain: z.string().optional().default(''),
+  billHcode: z.string().optional().default(''),
+  hproc: z.string().optional().default(''),
+  hn: z.string().optional().default(''),
+  an: z.string().min(1),
+  pid: z.string().optional().default(''),
+  patientName: z.string().optional().default(''),
+  dateAdm: z.string().nullable().optional(),
+  dateDisch: z.string().nullable().optional(),
+  ft: z.string().optional().default(''),
+  bf: z.string().optional().default(''),
+  drg: z.string().optional().default(''),
+  rw: z.number().nullable().optional(),
+  adjrw: z.number().nullable().optional(),
+  due: z.string().optional().default(''),
+  ptype: z.string().optional().default(''),
+  rwtype: z.string().optional().default(''),
+  rptype: z.string().optional().default(''),
+  rid: z.string().optional().default(''),
+  pstm: z.string().optional().default(''),
+  careas: z.string().optional().default(''),
+  sc: z.string().optional().default(''),
+  ed: z.string().optional().default(''),
+  reimb: z.number().optional().default(0),
+  nreimb: z.number().optional().default(0),
+  copay: z.number().optional().default(0),
+  cp: z.string().optional().default(''),
+  pp: z.string().optional().default(''),
+  ods: z.string().nullable().optional(),
+  spcmsg: z.string().nullable().optional(),
+});
+
+const aipnStmStatementSchema = z.object({
+  stmNo: z.string().min(1),
+  stmType: z.enum(['M', 'S']),
+  period: z.string().optional().default(''),
+  periodDesc: z.string().optional().default(''),
+  dateDue: z.string().optional().default(''),
+  cases: z.number().optional().default(0),
+  totalAdjrw: z.number().optional().default(0),
+  bills: z.array(aipnStmBillSchema).default([]),
+});
+
+const aipnStmImportSchema = z.object({
+  hospitalCode: z.string().optional().default(''),
+  statements: z.array(aipnStmStatementSchema).min(1),
+});
+
+type AipnStmImportPayload = z.infer<typeof aipnStmImportSchema>;
+
 /* ---------- Helpers ---------- */
 
 /** คอลัมน์ที่เก็บ JSON ในตาราง detail ต่างๆ — ต้อง JSON.stringify ก่อน insert */
@@ -361,6 +413,75 @@ async function insertAipnHead(pool: CachedPool, p: AipnImportPayload): Promise<v
   await runQuery(pool, sql);
 }
 
+const AIPN_STM_COLUMNS = [
+  'stm_no', 'stm_type', 'hospital_code', 'period', 'period_desc', 'date_due',
+  'hmain', 'bill_hcode', 'hproc', 'hn', 'an', 'pid', 'patient_name',
+  'date_adm', 'date_disch', 'ft', 'bf', 'drg', 'rw', 'adjrw', 'due', 'ptype',
+  'rwtype', 'rptype', 'rid', 'pstm', 'careas', 'sc', 'ed',
+  'reimb', 'nreimb', 'copay', 'cp', 'pp', 'ods', 'spcmsg',
+] as const;
+
+interface AipnStmRow {
+  stm_no: string; stm_type: string; hospital_code: string | null; period: string; period_desc: string; date_due: string;
+  hmain: string; bill_hcode: string; hproc: string; hn: string; an: string; pid: string; patient_name: string;
+  date_adm: string | null; date_disch: string | null; ft: string; bf: string; drg: string;
+  rw: number | null; adjrw: number | null; due: string; ptype: string; rwtype: string; rptype: string;
+  rid: string; pstm: string; careas: string; sc: string; ed: string;
+  reimb: number; nreimb: number; copay: number; cp: string; pp: string; ods: string | null; spcmsg: string | null;
+}
+
+/** แปลง payload (statements[].bills[]) → แถวเดียวต่อ Bill — denormalize ฟิลด์หัวใบแจ้งยอดเงินลงทุกแถว */
+function flattenAipnStmRows(p: AipnStmImportPayload): AipnStmRow[] {
+  const rows: AipnStmRow[] = [];
+  for (const stmt of p.statements) {
+    for (const b of stmt.bills) {
+      rows.push({
+        stm_no: stmt.stmNo, stm_type: stmt.stmType, hospital_code: p.hospitalCode || null,
+        period: stmt.period, period_desc: stmt.periodDesc, date_due: stmt.dateDue,
+        hmain: b.hmain, bill_hcode: b.billHcode, hproc: b.hproc, hn: b.hn, an: b.an, pid: b.pid,
+        patient_name: b.patientName, date_adm: b.dateAdm ?? null, date_disch: b.dateDisch ?? null,
+        ft: b.ft, bf: b.bf, drg: b.drg, rw: b.rw ?? null, adjrw: b.adjrw ?? null, due: b.due,
+        ptype: b.ptype, rwtype: b.rwtype, rptype: b.rptype, rid: b.rid, pstm: b.pstm, careas: b.careas,
+        sc: b.sc, ed: b.ed, reimb: b.reimb, nreimb: b.nreimb, copay: b.copay, cp: b.cp, pp: b.pp,
+        ods: b.ods ?? null, spcmsg: b.spcmsg ?? null,
+      });
+    }
+  }
+  return rows;
+}
+
+/** เพิ่มเฉพาะแถวที่ยังไม่มีในตาราง (เช็คคู่ stm_no+an) — รหัสที่มีอยู่แล้ว → ข้าม ไม่แก้ทับ */
+async function insertAipnStmRows(pool: CachedPool, rows: AipnStmRow[]): Promise<{ inserted: number; skipped: number }> {
+  if (rows.length === 0) return { inserted: 0, skipped: 0 };
+
+  // คัดรหัสซ้ำกันเองในชุดเดียวกัน (เก็บรายการล่าสุดของแต่ละคู่ stm_no+an)
+  const byKey = new Map<string, AipnStmRow>();
+  for (const r of rows) byKey.set(`${r.stm_no} ${r.an}`, r);
+  const dedupedRows = [...byKey.values()];
+
+  const existing = new Set<string>();
+  const checkChunkSize = 300;
+  for (let i = 0; i < dedupedRows.length; i += checkChunkSize) {
+    const chunk = dedupedRows.slice(i, i + checkChunkSize);
+    const conditions = chunk.map((r) => `(stm_no = ${sqlValue(r.stm_no)} AND an = ${sqlValue(r.an)})`).join(' OR ');
+    const result = await runQuery(pool, `SELECT stm_no, an FROM aipn_stm WHERE ${conditions}`);
+    for (const row of result.rows) existing.add(`${String(row.stm_no)} ${String(row.an)}`);
+  }
+
+  const newRows = dedupedRows.filter((r) => !existing.has(`${r.stm_no} ${r.an}`));
+  const cols = AIPN_STM_COLUMNS.join(', ');
+  const insertChunkSize = 100;
+  for (let i = 0; i < newRows.length; i += insertChunkSize) {
+    const chunk = newRows.slice(i, i + insertChunkSize);
+    const values = chunk
+      .map((row) => `(${AIPN_STM_COLUMNS.map((c) => sqlValue((row as unknown as Record<string, unknown>)[c])).join(', ')})`)
+      .join(', ');
+    await runQuery(pool, `INSERT INTO aipn_stm (${cols}) VALUES ${values}`);
+  }
+
+  return { inserted: newRows.length, skipped: dedupedRows.length - newRows.length };
+}
+
 /* ---------- Routes ---------- */
 
 export async function claimImportRoutes(app: FastifyInstance) {
@@ -600,6 +721,45 @@ export async function claimImportRoutes(app: FastifyInstance) {
         headInserted: 1,
         detailInserted: inserted,
       };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: 'ImportFailed', message: msg });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db/aipn-stm-import — เพิ่มเฉพาะ (stm_no, an) ที่ยังไม่มีในตาราง aipn_stm */
+  app.post('/claim-db/aipn-stm-import', async (request, reply) => {
+    const auth = request.auth!;
+    const parsed = aipnStmImportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
+    }
+    const payload = parsed.data;
+
+    let pool: CachedPool;
+    try {
+      pool = await openClaimPool(auth.hospitalId);
+    } catch (err) {
+      return reply.code(412).send({
+        error: 'ClaimDbNotConfigured',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const rows = flattenAipnStmRows(payload);
+      const { inserted, skipped } = await insertAipnStmRows(pool, rows);
+
+      audit(request, {
+        action: 'claim-db.aipn-stm-import',
+        targetType: 'aipn_stm',
+        targetId: payload.statements.map((s) => s.stmNo).join(','),
+        metadata: { totalBills: rows.length, inserted, skipped },
+      });
+
+      return { ok: true, inserted, skipped, totalBills: rows.length };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return reply.code(500).send({ error: 'ImportFailed', message: msg });

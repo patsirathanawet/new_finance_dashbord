@@ -463,6 +463,67 @@ export async function importAipnToClaimDb(payload: AipnImportPayload): Promise<A
   return res.data;
 }
 
+export interface AipnStmBillPayload {
+  hmain?: string;
+  billHcode?: string;
+  hproc?: string;
+  hn?: string;
+  an: string;
+  pid?: string;
+  patientName?: string;
+  dateAdm?: string | null;
+  dateDisch?: string | null;
+  ft?: string;
+  bf?: string;
+  drg?: string;
+  rw?: number | null;
+  adjrw?: number | null;
+  due?: string;
+  ptype?: string;
+  rwtype?: string;
+  rptype?: string;
+  rid?: string;
+  pstm?: string;
+  careas?: string;
+  sc?: string;
+  ed?: string;
+  reimb?: number;
+  nreimb?: number;
+  copay?: number;
+  cp?: string;
+  pp?: string;
+  ods?: string | null;
+  spcmsg?: string | null;
+}
+
+export interface AipnStmStatementPayload {
+  stmNo: string;
+  stmType: 'M' | 'S';
+  period?: string;
+  periodDesc?: string;
+  dateDue?: string;
+  cases?: number;
+  totalAdjrw?: number;
+  bills: AipnStmBillPayload[];
+}
+
+export interface AipnStmImportPayload {
+  hospitalCode?: string;
+  statements: AipnStmStatementPayload[];
+}
+
+export interface AipnStmImportResult {
+  ok: boolean;
+  inserted: number;
+  skipped: number;
+  totalBills: number;
+}
+
+export async function importAipnStmToClaimDb(payload: AipnStmImportPayload): Promise<AipnStmImportResult> {
+  const res = await getBackend().post<AipnStmImportResult>('/claim-db/aipn-stm-import', payload);
+  return res.data;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Claim DB — Read queries (rep_head / rep_detail)                    */
 /* ------------------------------------------------------------------ */

@@ -5,15 +5,16 @@ import { useSessionStore } from '../store/sessionStore';
 import { useUploadStore } from '../store/uploadStore';
 import { parseREP } from '../lib/repParser';
 import {
-  importRepToClaimDb, importSsopRepToClaimDb, importCsopToClaimDb, importAipnToClaimDb,
+  importRepToClaimDb, importSsopRepToClaimDb, importCsopToClaimDb, importAipnToClaimDb, importAipnStmToClaimDb,
   extractErrorMessage,
 } from '../lib/backendApi';
 import { parseSTMFile } from '../lib/stmParser';
 import { parseSsopRepZip } from '../lib/ssopRepParser';
 import { parseCsopRepZip } from '../lib/csopRepParser';
 import { parseAipnRepZip } from '../lib/aipnRepParser';
+import { parseAipnStmZip } from '../lib/aipnStmParser';
 import { formatCurrency, formatNumber } from '../lib/formatUtils';
-import type { REPRecord, STMRecord, SsopRepRecord, CsopRepRecord, AipnRepRecord } from '../types/upload';
+import type { REPRecord, STMRecord, SsopRepRecord, CsopRepRecord, AipnRepRecord, AipnStmRecord } from '../types/upload';
 
 type ParseStatus = 'idle' | 'parsing' | 'success' | 'error';
 type ZipRecord = SsopRepRecord | CsopRepRecord | AipnRepRecord;
@@ -22,8 +23,8 @@ interface FileItem {
   file: File;
   status: ParseStatus;
   error?: string;
-  record?: REPRecord | STMRecord | ZipRecord;
-  fileType: 'REP' | 'STM' | 'SSOP' | 'CSOP' | 'AIPN';
+  record?: REPRecord | STMRecord | ZipRecord | AipnStmRecord;
+  fileType: 'REP' | 'STM' | 'SSOP' | 'CSOP' | 'AIPN' | 'AIPN_STM';
 }
 
 /** ไฟล์ .zip ในโซน REP มีหลายรูปแบบ (SSOP/CSOP/AIPN) — ลองตามลำดับ ใครพบไฟล์ marker ของตัวเองก่อนคือ match */
@@ -201,7 +202,7 @@ export default function GovUploadPage() {
       for (const item of newItems) {
         const buf = await item.file.arrayBuffer();
         try {
-          let record: REPRecord | STMRecord | ZipRecord;
+          let record: REPRecord | STMRecord | ZipRecord | AipnStmRecord;
           let actualType: FileItem['fileType'] = item.fileType;
 
           if (fileType === 'REP' && /\.zip$/i.test(item.file.name)) {
@@ -228,6 +229,21 @@ export default function GovUploadPage() {
                 prev.map((p) =>
                   p.file === item.file
                     ? { ...p, status: 'error', error: `รหัสโรงพยาบาลในไฟล์ (${rep.hospitalCode}) ไม่ตรงกับที่ login (${hospitalCode})` }
+                    : p
+                )
+              );
+              continue;
+            }
+          } else if (/\.zip$/i.test(item.file.name)) {
+            // ไฟล์ .zip ในโซน STM → ใบแจ้งยอดเงินที่เบิกได้ AIPN (SIGNSTMM/SIGNSTMS.xml)
+            record = await parseAipnStmZip(buf, item.file.name, userName ?? 'ไม่ระบุ');
+            actualType = 'AIPN_STM';
+            const stm = record as AipnStmRecord;
+            if (!isAdmin && hospitalCode && stm.hospitalCode !== hospitalCode) {
+              setPendingFiles((prev) =>
+                prev.map((p) =>
+                  p.file === item.file
+                    ? { ...p, status: 'error', error: `รหัสโรงพยาบาลในไฟล์ (${stm.hospitalCode}) ไม่ตรงกับที่ login (${hospitalCode})` }
                     : p
                 )
               );
@@ -424,6 +440,31 @@ export default function GovUploadPage() {
         } catch (e) {
           messages.push(`✗ ${item.file.name}: ${extractErrorMessage(e)}`);
         }
+      } else if (item.fileType === 'AIPN_STM') {
+        const rec = item.record as AipnStmRecord;
+        // ส่งไปที่ claim DB (aipn_stm) — เพิ่มเฉพาะ (stm_no, an) ที่ยังไม่มี
+        try {
+          const result = await importAipnStmToClaimDb({
+            hospitalCode: rec.hospitalCode,
+            statements: rec.statements.map((s) => ({
+              stmNo: s.stmNo,
+              stmType: s.stmType,
+              period: s.period,
+              periodDesc: s.periodDesc,
+              dateDue: s.dateDue,
+              cases: s.cases,
+              totalAdjrw: s.totalAdjrw,
+              bills: s.bills,
+            })),
+          });
+          messages.push(
+            result.skipped > 0
+              ? `✓ ${item.file.name}: นำเข้าใหม่ ${result.inserted} รายการ (ข้าม ${result.skipped} รายการที่มีอยู่แล้ว) (aipn_stm)`
+              : `✓ ${item.file.name}: นำเข้า ${result.inserted} รายการ (aipn_stm)`
+          );
+        } catch (e) {
+          messages.push(`✗ ${item.file.name}: ${extractErrorMessage(e)}`);
+        }
       } else {
         await saveSTM(item.record as STMRecord);
         messages.push(`✓ ${item.file.name}: บันทึก STM`);
@@ -440,7 +481,7 @@ export default function GovUploadPage() {
       const ext = f.name.split('.').pop()?.toUpperCase();
       return fileType === 'REP'
         ? ['REP', 'XLS', 'XLSX', 'ZIP'].includes(ext ?? '')
-        : ['XLS', 'XLSX', 'XML'].includes(ext ?? '');
+        : ['XLS', 'XLSX', 'XML', 'ZIP'].includes(ext ?? '');
     });
     if (accepted.length) addFiles(accepted, fileType);
   };
@@ -520,14 +561,14 @@ export default function GovUploadPage() {
             <div>
               <p className="text-sm font-semibold text-gray-800">ไฟล์ STM</p>
               <p className="text-xs text-gray-500 mt-0.5">รายงานยอดเงินที่เบิกได้ (Statement)</p>
-              <p className="text-xs text-gray-400 mt-1">ลากวาง หรือคลิกเพื่อเลือกไฟล์ .XLS / .XML</p>
+              <p className="text-xs text-gray-400 mt-1">ลากวาง หรือคลิกเพื่อเลือกไฟล์ .XLS / .XML / .ZIP (AIPN)</p>
             </div>
             <Upload className="w-4 h-4 text-gray-400" />
           </div>
           <input
             id="stm-input"
             type="file"
-            accept=".xls,.xlsx,.xml,.XLS,.XLSX,.XML"
+            accept=".xls,.xlsx,.xml,.zip,.XLS,.XLSX,.XML,.ZIP"
             multiple
             className="hidden"
             onChange={(e) => handleFileInput(e, 'STM')}
@@ -562,7 +603,7 @@ export default function GovUploadPage() {
               <div key={idx} className="px-5 py-3 flex items-center gap-3">
                 {item.fileType === 'REP' && <FileText className="w-4 h-4 text-primary-400 flex-shrink-0" />}
                 {item.fileType === 'STM' && <FileSpreadsheet className="w-4 h-4 text-green-400 flex-shrink-0" />}
-                {(item.fileType === 'SSOP' || item.fileType === 'CSOP' || item.fileType === 'AIPN') &&
+                {(item.fileType === 'SSOP' || item.fileType === 'CSOP' || item.fileType === 'AIPN' || item.fileType === 'AIPN_STM') &&
                   <FileArchive className="w-4 h-4 text-purple-400 flex-shrink-0" />}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 truncate">{item.file.name}</p>
@@ -577,6 +618,11 @@ export default function GovUploadPage() {
                         `[${item.fileType}] รพ. ${(item.record as ZipRecord).hospitalCode} — เลขที่ตอบรับ ${(item.record as ZipRecord).ackNo} — ` +
                         `ส่ง ${formatNumber((item.record as ZipRecord).totalSubmitted)} ราย (ผ่าน ${formatNumber((item.record as ZipRecord).totalPassed)} / ` +
                         `ไม่ผ่าน ${formatNumber((item.record as ZipRecord).totalFailed)})`}
+                      {item.fileType === 'AIPN_STM' &&
+                        `[AIPN STM] รพ. ${(item.record as AipnStmRecord).hospitalCode} — งวด ${(item.record as AipnStmRecord).period} — ` +
+                        (item.record as AipnStmRecord).statements
+                          .map((s) => `${s.stmType}: ${formatNumber(s.bills.length)} ราย`)
+                          .join(', ')}
                     </p>
                   )}
                 </div>
