@@ -102,20 +102,14 @@ export default function ClaimDbConfigPage() {
   const [saveError, setSaveError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // หัวข้อ CSOP — แทนที่ rep_head/rep_detail/eclaim_error เดิมทั้งหมด
-  const [creatingCsop, setCreatingCsop] = useState(false);
-  const [createCsopResult, setCreateCsopResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // สถานะตารางของแต่ละหัวข้อ — แสดงในกริดรวมเดียว (สร้างจริงผ่านปุ่มเดียวด้านล่าง)
   const [csopTablesStatus, setCsopTablesStatus] = useState<Record<(typeof CSOP_TABLE_NAMES)[number], boolean> | null>(null);
-
-  // หัวข้อ SSOP — ของเดิม ไม่เปลี่ยน
-  const [creatingSsop, setCreatingSsop] = useState(false);
-  const [createSsopResult, setCreateSsopResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [ssopTablesStatus, setSsopTablesStatus] = useState<Record<(typeof SSOP_TABLE_NAMES)[number], boolean> | null>(null);
-
-  // หัวข้อ AIPN — ใหม่
-  const [creatingAipn, setCreatingAipn] = useState(false);
-  const [createAipnResult, setCreateAipnResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [aipnTablesStatus, setAipnTablesStatus] = useState<Record<(typeof AIPN_TABLE_NAMES)[number], boolean> | null>(null);
+
+  // ปุ่มเดียวสร้างตารางทั้งหมด (CSOP + SSOP + AIPN) ในฐานข้อมูลปลายทางเดียวกัน
+  const [creatingAll, setCreatingAll] = useState(false);
+  const [createAllResults, setCreateAllResults] = useState<{ label: string; ok: boolean; message: string }[] | null>(null);
 
   // Import error code — ของหัวข้อ CSOP (csop_error)
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -278,59 +272,37 @@ export default function ClaimDbConfigPage() {
     }
   };
 
-  const handleCreateCsopTables = async () => {
-    setCreatingCsop(true);
-    setCreateCsopResult(null);
+  /** กดปุ่มเดียว สร้างตารางของ CSOP + SSOP + AIPN ให้ครบในฐานข้อมูลปลายทางเดียวกัน (idempotent ทุกตาราง) */
+  const handleCreateAllTables = async () => {
+    setCreatingAll(true);
+    setCreateAllResults(null);
+    const results: { label: string; ok: boolean; message: string }[] = [];
+
     try {
       const r = await createCsopTables();
-      if (r.ok) {
-        setCreateCsopResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
-      } else {
-        setCreateCsopResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
-      }
-      try { setCsopTablesStatus(await checkCsopTables()); } catch { /* ignore */ }
-      await reload();
+      results.push({ label: 'CSOP', ok: r.ok, message: r.ok ? `สร้างสำเร็จ: ${r.created.join(', ')}` : (r.error || 'สร้างตารางล้มเหลว') });
     } catch (e) {
-      setCreateCsopResult({ ok: false, message: extractErrorMessage(e) });
-    } finally {
-      setCreatingCsop(false);
+      results.push({ label: 'CSOP', ok: false, message: extractErrorMessage(e) });
     }
-  };
-
-  const handleCreateSsopRepTables = async () => {
-    setCreatingSsop(true);
-    setCreateSsopResult(null);
     try {
       const r = await createSsopRepTables();
-      if (r.ok) {
-        setCreateSsopResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
-      } else {
-        setCreateSsopResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
-      }
-      try { setSsopTablesStatus(await checkSsopRepTables()); } catch { /* ignore */ }
+      results.push({ label: 'SSOP', ok: r.ok, message: r.ok ? `สร้างสำเร็จ: ${r.created.join(', ')}` : (r.error || 'สร้างตารางล้มเหลว') });
     } catch (e) {
-      setCreateSsopResult({ ok: false, message: extractErrorMessage(e) });
-    } finally {
-      setCreatingSsop(false);
+      results.push({ label: 'SSOP', ok: false, message: extractErrorMessage(e) });
     }
-  };
-
-  const handleCreateAipnTables = async () => {
-    setCreatingAipn(true);
-    setCreateAipnResult(null);
     try {
       const r = await createAipnTables();
-      if (r.ok) {
-        setCreateAipnResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
-      } else {
-        setCreateAipnResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
-      }
-      try { setAipnTablesStatus(await checkAipnTables()); } catch { /* ignore */ }
+      results.push({ label: 'AIPN', ok: r.ok, message: r.ok ? `สร้างสำเร็จ: ${r.created.join(', ')}` : (r.error || 'สร้างตารางล้มเหลว') });
     } catch (e) {
-      setCreateAipnResult({ ok: false, message: extractErrorMessage(e) });
-    } finally {
-      setCreatingAipn(false);
+      results.push({ label: 'AIPN', ok: false, message: extractErrorMessage(e) });
     }
+
+    setCreateAllResults(results);
+    try { setCsopTablesStatus(await checkCsopTables()); } catch { /* ignore */ }
+    try { setSsopTablesStatus(await checkSsopRepTables()); } catch { /* ignore */ }
+    try { setAipnTablesStatus(await checkAipnTables()); } catch { /* ignore */ }
+    await reload();
+    setCreatingAll(false);
   };
 
   if (loading) {
@@ -518,44 +490,55 @@ export default function ClaimDbConfigPage() {
         </div>
       )}
 
-      {/* ============================== หัวข้อ CSOP ============================== */}
-      <div className="pt-2">
-        <h2 className="text-sm font-bold text-primary-700 uppercase tracking-wide">หัวข้อ CSOP</h2>
-        <p className="text-xs text-gray-400 mt-0.5">สิทธิข้าราชการผู้ป่วยนอก — กรมบัญชีกลาง</p>
-      </div>
-
-      {/* Create CSOP tables section */}
+      {/* ============================== สร้างตารางทั้งหมด (ปุ่มเดียว) ============================== */}
       <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Hammer className="w-5 h-5 text-primary-600" />
-          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
+          <h2 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง (ทั้งหมด)</h2>
         </div>
 
         <p className="text-xs text-gray-500">
-          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_rep_head</code> (สรุปต่อเลขที่ตอบรับ) +{' '}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_rep_head_detail</code> (รายการเบิกทุกบรรทัด) +{' '}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_error</code> (รหัส error) —{' '}
-          idempotent (รันซ้ำได้)
+          กดปุ่มเดียว ระบบจะสร้างตารางของ <strong>CSOP + SSOP + AIPN</strong> ให้ครบในฐานข้อมูลปลายทางเดียวกัน —
+          idempotent ทุกตาราง (รันซ้ำได้ ไม่ลบของเดิม)
         </p>
 
         <TargetDbBanner serverState={serverState} />
-        <TablesStatusGrid status={csopTablesStatus} tables={CSOP_TABLE_NAMES} />
+
+        <div className="space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-primary-700 mb-1.5">CSOP</p>
+            <TablesStatusGrid status={csopTablesStatus} tables={CSOP_TABLE_NAMES} />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-purple-700 mb-1.5">SSOP</p>
+            <TablesStatusGrid status={ssopTablesStatus} tables={SSOP_TABLE_NAMES} />
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-purple-700 mb-1.5">AIPN</p>
+            <TablesStatusGrid status={aipnTablesStatus} tables={AIPN_TABLE_NAMES} />
+          </div>
+        </div>
 
         <button
-          onClick={handleCreateCsopTables}
-          disabled={!isAdmin || creatingCsop || !serverState?.configured}
+          onClick={handleCreateAllTables}
+          disabled={!isAdmin || creatingAll || !serverState?.configured}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
         >
-          {creatingCsop ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
-          สร้างตาราง (csop_rep_head + csop_rep_head_detail + csop_error)
+          {creatingAll ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
+          สร้างตารางทั้งหมด (CSOP + SSOP + AIPN)
         </button>
 
-        {createCsopResult && (
-          <div className={`text-xs rounded-2xl p-3 ${
-            createCsopResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {createCsopResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {createCsopResult.message}
+        {createAllResults && (
+          <div className="space-y-1.5">
+            {createAllResults.map((r) => (
+              <div
+                key={r.label}
+                className={`text-xs rounded-2xl p-3 ${r.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}
+              >
+                {r.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
+                <strong>{r.label}:</strong> {r.message}
+              </div>
+            ))}
           </div>
         )}
 
@@ -564,6 +547,12 @@ export default function ClaimDbConfigPage() {
             ⚠ ต้องบันทึก connection ก่อน ถึงจะสร้างตารางได้
           </p>
         )}
+      </div>
+
+      {/* ============================== หัวข้อ CSOP ============================== */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-primary-700 uppercase tracking-wide">หัวข้อ CSOP</h2>
+        <p className="text-xs text-gray-400 mt-0.5">สิทธิข้าราชการผู้ป่วยนอก — กรมบัญชีกลาง</p>
       </div>
 
       {/* Import error codes section — csop_error */}
@@ -627,97 +616,6 @@ export default function ClaimDbConfigPage() {
         <p className="text-sm">ยังไม่มีตาราง — รอเชื่อมแหล่งข้อมูลในอนาคต</p>
       </div>
 
-      {/* ============================== หัวข้อ SSOP ============================== */}
-      <div className="pt-2">
-        <h2 className="text-sm font-bold text-purple-700 uppercase tracking-wide">หัวข้อ SSOP</h2>
-        <p className="text-xs text-gray-400 mt-0.5">สิทธิประกันสังคมผู้ป่วยนอก</p>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Hammer className="w-5 h-5 text-purple-600" />
-          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
-        </div>
-
-        <p className="text-xs text-gray-500">
-          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ssop_rep_head</code> (สรุปต่อเลขที่ตอบรับ) +{' '}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ssop_rep_detail</code> (รายการเบิกทุกบรรทัด) —{' '}
-          idempotent (รันซ้ำได้)
-        </p>
-
-        <TargetDbBanner serverState={serverState} />
-        <TablesStatusGrid status={ssopTablesStatus} tables={SSOP_TABLE_NAMES} />
-
-        <button
-          onClick={handleCreateSsopRepTables}
-          disabled={!isAdmin || creatingSsop || !serverState?.configured}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-500 to-purple-700 rounded-2xl hover:from-purple-600 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
-        >
-          {creatingSsop ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
-          สร้างตาราง (ssop_rep_head + ssop_rep_detail)
-        </button>
-
-        {createSsopResult && (
-          <div className={`text-xs rounded-2xl p-3 ${
-            createSsopResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {createSsopResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {createSsopResult.message}
-          </div>
-        )}
-
-        {!serverState?.configured && (
-          <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-2xl">
-            ⚠ ต้องบันทึก connection ก่อน ถึงจะสร้างตารางได้
-          </p>
-        )}
-      </div>
-
-      {/* ============================== หัวข้อ AIPN ============================== */}
-      <div className="pt-2">
-        <h2 className="text-sm font-bold text-purple-700 uppercase tracking-wide">หัวข้อ AIPN</h2>
-        <p className="text-xs text-gray-400 mt-0.5">สิทธิประกันสังคมผู้ป่วยใน</p>
-      </div>
-
-      <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
-        <div className="flex items-center gap-2">
-          <Hammer className="w-5 h-5 text-purple-600" />
-          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
-        </div>
-
-        <p className="text-xs text-gray-500">
-          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">aipn_rep_head</code> (สรุปต่อเลขที่ตอบรับ) +{' '}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">aipn_rep_head_detail</code> (รายการเบิกทุกราย) —{' '}
-          idempotent (รันซ้ำได้)
-        </p>
-
-        <TargetDbBanner serverState={serverState} />
-        <TablesStatusGrid status={aipnTablesStatus} tables={AIPN_TABLE_NAMES} />
-
-        <button
-          onClick={handleCreateAipnTables}
-          disabled={!isAdmin || creatingAipn || !serverState?.configured}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-500 to-purple-700 rounded-2xl hover:from-purple-600 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
-        >
-          {creatingAipn ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
-          สร้างตาราง (aipn_rep_head + aipn_rep_head_detail)
-        </button>
-
-        {createAipnResult && (
-          <div className={`text-xs rounded-2xl p-3 ${
-            createAipnResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {createAipnResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {createAipnResult.message}
-          </div>
-        )}
-
-        {!serverState?.configured && (
-          <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-2xl">
-            ⚠ ต้องบันทึก connection ก่อน ถึงจะสร้างตารางได้
-          </p>
-        )}
-      </div>
     </div>
   );
 }
