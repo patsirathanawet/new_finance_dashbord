@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   ShieldCheck,
   Building,
-  Zap,
   BedDouble,
   Table,
   FileText,
@@ -33,13 +32,13 @@ const ECLAIM_ITEMS: NavItem[] = [
   { path: '/eclaim/cipn',       label: 'สิทธิข้าราชการผู้ป่วยใน [CIPN]',  icon: BedDouble },
   { path: '/eclaim/sss',        label: 'สิทธิประกันสังคมผู้ป่วยนอก [SSOP]', icon: Building },
   { path: '/eclaim/aipn',       label: 'สิทธิประกันสังคมผู้ป่วยใน [AIPN]',  icon: BedDouble },
-  { path: '/eclaim/srt',        label: 'สิทธิการไฟฟ้า [SRT]',       icon: Zap },
 ];
 
-// ซ่อนไว้ — ต้องการใช้อีกครั้ง: ย้ายมาที่ ECLAIM_ITEMS ด้านบน + uncomment import icon ที่ใช้ (Landmark, GraduationCap)
+// ซ่อนไว้ — ต้องการใช้อีกครั้ง: ย้ายมาที่ ECLAIM_ITEMS ด้านบน + uncomment import icon ที่ใช้ (Landmark, GraduationCap, Zap)
 //   { path: '/eclaim/ofc-local', label: 'สิทธิอปท [LGO]',     icon: Landmark }
 //   { path: '/eclaim/bkk',       label: 'สิทธิกทม. [BKK]',     icon: Building }
 //   { path: '/eclaim/pvt',       label: 'สิทธิครูเอกชน [PVT]', icon: GraduationCap }
+//   { path: '/eclaim/srt',       label: 'สิทธิการไฟฟ้า [SRT]', icon: Zap }
 
 // เมนูคลินิกทั้งกลุ่ม — ซ่อนทั้งหมวด (เปิดทีหลังเมื่อพร้อมใช้)
 const CLINICAL_ITEMS: NavItem[] = [];
