@@ -9,6 +9,7 @@ import {
   createSsopRepTables, checkSsopRepTables,
   createAipnTables, checkAipnTables,
   listCsopErrorCodes, seedCsopErrorCodes,
+  listAipnErrorCodes, seedAipnErrorCodes,
   extractErrorMessage,
   type HosxpDbType, type TestConnectionResult, type ClaimDbConfigState, type EclaimErrorCode,
 } from '../lib/backendApi';
@@ -84,7 +85,7 @@ function TablesStatusGrid<T extends string>({ status, tables }: { status: Record
 
 const CSOP_TABLE_NAMES = ['csop_rep_head', 'csop_rep_head_detail', 'csop_error'] as const;
 const SSOP_TABLE_NAMES = ['ssop_rep_head', 'ssop_rep_detail'] as const;
-const AIPN_TABLE_NAMES = ['aipn_rep_head', 'aipn_rep_head_detail'] as const;
+const AIPN_TABLE_NAMES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error'] as const;
 
 export default function ClaimDbConfigPage() {
   const isAdmin = useSessionStore((s) => s.isAdmin);
@@ -116,6 +117,12 @@ export default function ClaimDbConfigPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [errorCodesCount, setErrorCodesCount] = useState<number | null>(null);
+
+  // Import error code — ของหัวข้อ AIPN (aipn_error)
+  const aipnFileInputRef = useRef<HTMLInputElement>(null);
+  const [importingAipn, setImportingAipn] = useState(false);
+  const [importAipnResult, setImportAipnResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [aipnErrorCodesCount, setAipnErrorCodesCount] = useState<number | null>(null);
 
   function looksLikeGarbledText(value: string | null | undefined): boolean {
     if (!value) return false;
@@ -161,7 +168,16 @@ export default function ClaimDbConfigPage() {
           }
         } catch { /* ignore */ }
         try { setSsopTablesStatus(await checkSsopRepTables()); } catch { /* ignore */ }
-        try { setAipnTablesStatus(await checkAipnTables()); } catch { /* ignore */ }
+        try {
+          const ts = await checkAipnTables();
+          setAipnTablesStatus(ts);
+          if (ts.aipn_error) {
+            try {
+              const list = await listAipnErrorCodes();
+              setAipnErrorCodesCount(list.total);
+            } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
       }
     } catch (e) {
       console.error('load claim-db-config failed', e);
@@ -222,6 +238,59 @@ export default function ClaimDbConfigPage() {
       setImportResult({ ok: false, message: extractErrorMessage(e) });
     } finally {
       setImporting(false);
+    }
+  };
+
+  /** Import xlsx (error_aipn — 3 คอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข) → bulk insert (skip ถ้ามีอยู่แล้ว) ลง aipn_error */
+  const handleImportAipnFile = async (file: File) => {
+    setImportingAipn(true);
+    setImportAipnResult(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), { type: 'array', codepage: 874 });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, blankrows: false });
+
+      const byCode = new Map<string, EclaimErrorCode>();
+      for (let i = 0; i < rows.length; i++) {
+        const r = rows[i] ?? [];
+        const codeRaw = r[0];
+        if (codeRaw === null || codeRaw === undefined || codeRaw === '') continue;
+        const code = String(codeRaw).trim();
+        // ข้าม header
+        if (/รหัส|^code$|^edcode$/i.test(code)) continue;
+        const desc = r[1] != null ? String(r[1]).trim() : null;
+        const reso = r[2] != null ? String(r[2]).trim() : null;
+        byCode.set(code, { code, description: desc, resolution: reso });
+      }
+      const dataRows: EclaimErrorCode[] = [...byCode.values()];
+
+      if (dataRows.length === 0) {
+        setImportAipnResult({ ok: false, message: 'ไม่พบข้อมูลในไฟล์ (ต้องมีคอลัมน์: รหัส | คำอธิบาย | วิธีแก้ไข)' });
+        return;
+      }
+
+      const issue = findEncodingIssues(dataRows);
+      if (issue) {
+        setImportAipnResult({ ok: false, message: issue });
+        return;
+      }
+
+      const result = await seedAipnErrorCodes(dataRows);
+      setImportAipnResult({
+        ok: true,
+        message: result.skipped > 0
+          ? `นำเข้าใหม่ ${result.inserted} รหัสสำเร็จ (ข้าม ${result.skipped} รหัสที่มีอยู่แล้ว)`
+          : `นำเข้าใหม่ ${result.inserted} รหัสสำเร็จ`,
+      });
+      try {
+        const list = await listAipnErrorCodes();
+        setAipnErrorCodesCount(list.total);
+      } catch { /* ignore */ }
+    } catch (e) {
+      setImportAipnResult({ ok: false, message: extractErrorMessage(e) });
+    } finally {
+      setImportingAipn(false);
     }
   };
 
@@ -565,15 +634,16 @@ export default function ClaimDbConfigPage() {
         <p className="text-xs text-gray-400 mt-0.5">สิทธิข้าราชการผู้ป่วยนอก — กรมบัญชีกลาง</p>
       </div>
 
-      {/* Import error codes section — csop_error */}
+      {/* Import error codes section — csop_error + aipn_error */}
       <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
         <div className="flex items-center gap-2">
           <FileSpreadsheet className="w-5 h-5 text-primary-600" />
-          <h3 className="text-sm font-semibold text-gray-900">นำเข้ารหัส Error Code (csop_error)</h3>
+          <h3 className="text-sm font-semibold text-gray-900">นำเข้ารหัส Error Code (csop_error / aipn_error)</h3>
         </div>
 
         <p className="text-xs text-gray-500">
-          อัปโหลดไฟล์ <strong>error_csop</strong> (ไฟล์จริงจากกรมบัญชีกลาง — 2 คอลัมน์: <strong>Errcode | Errdesc</strong>) —
+          <strong>error_csop</strong> — ไฟล์จริงจากกรมบัญชีกลาง 2 คอลัมน์: <strong>Errcode | Errdesc</strong> ·{' '}
+          <strong>error_aipn</strong> — ไฟล์ .xlsx 3 คอลัมน์: <strong>รหัส | คำอธิบาย | วิธีแก้ไข</strong> —
           รหัสที่มีอยู่แล้วในตารางจะถูก<strong>ข้าม</strong> ส่วนรหัสที่ยังไม่มีจะถูกเพิ่มเข้าไปใหม่
         </p>
 
@@ -604,15 +674,52 @@ export default function ClaimDbConfigPage() {
             {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
             เลือกไฟล์ error_csop
           </button>
+
+          <input
+            ref={aipnFileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImportAipnFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            onClick={() => aipnFileInputRef.current?.click()}
+            disabled={!isAdmin || importingAipn || !aipnTablesStatus?.aipn_error}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-purple-500 to-purple-700 rounded-2xl hover:from-purple-600 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
+          >
+            {importingAipn ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            เลือกไฟล์ error_aipn
+          </button>
+
           {!csopTablesStatus?.csop_error && (
             <span className="text-xs text-amber-600">ต้องสร้างตาราง csop_error ก่อน (กดปุ่ม "สร้างตาราง" ด้านบน)</span>
           )}
+          {!aipnTablesStatus?.aipn_error && (
+            <span className="text-xs text-amber-600">ต้องสร้างตาราง aipn_error ก่อน (กดปุ่ม "สร้างตาราง" ด้านบน)</span>
+          )}
         </div>
+
+        {aipnErrorCodesCount !== null && (
+          <div className="bg-purple-50 rounded-2xl px-4 py-2.5 text-xs text-purple-800">
+            <CheckCircle className="inline w-3.5 h-3.5 mr-1" />
+            ปัจจุบันมี <strong>{aipnErrorCodesCount}</strong> รหัสในตาราง aipn_error
+          </div>
+        )}
 
         {importResult && (
           <div className={`text-xs rounded-2xl p-3 ${importResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
             {importResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {importResult.message}
+            <strong>error_csop:</strong> {importResult.message}
+          </div>
+        )}
+        {importAipnResult && (
+          <div className={`text-xs rounded-2xl p-3 ${importAipnResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+            {importAipnResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
+            <strong>error_aipn:</strong> {importAipnResult.message}
           </div>
         )}
       </div>

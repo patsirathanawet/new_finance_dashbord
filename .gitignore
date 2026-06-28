@@ -19,6 +19,9 @@ dist-electron
 # ข้อมูลเคลม/ผู้ป่วยจริง — ห้ามขึ้น git/public repo เด็ดขาด
 /ALL_REP_STM
 
+# Claude Code harness-internal scheduling state
+.claude/scheduled_tasks.lock
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

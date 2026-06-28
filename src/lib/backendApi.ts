@@ -343,8 +343,8 @@ export async function createAipnTables(): Promise<CreateTablesResult> {
   return res.data;
 }
 
-export async function checkAipnTables(): Promise<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean }> {
-  const res = await getBackend().get<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean }>('/claim-db-config/check-aipn-tables');
+export async function checkAipnTables(): Promise<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean }> {
+  const res = await getBackend().get<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean; aipn_error: boolean }>('/claim-db-config/check-aipn-tables');
   return res.data;
 }
 
@@ -796,6 +796,22 @@ export async function seedCsopErrorCodes(
 ): Promise<{ ok: boolean; inserted: number; skipped: number }> {
   const res = await getBackend().post<{ ok: boolean; inserted: number; skipped: number }>(
     '/claim-db/csop-error-codes/seed',
+    { rows, replace: false },
+  );
+  return res.data;
+}
+
+export async function listAipnErrorCodes(): Promise<{ codes: EclaimErrorCode[]; total: number }> {
+  const res = await getBackend().get<{ codes: EclaimErrorCode[]; total: number }>('/claim-db/aipn-error-codes');
+  return res.data;
+}
+
+/** เพิ่มเฉพาะรหัสที่ยังไม่มีในตาราง aipn_error — รหัสที่มีอยู่แล้วจะถูกข้าม ไม่แก้ทับ */
+export async function seedAipnErrorCodes(
+  rows: EclaimErrorCode[],
+): Promise<{ ok: boolean; inserted: number; skipped: number }> {
+  const res = await getBackend().post<{ ok: boolean; inserted: number; skipped: number }>(
+    '/claim-db/aipn-error-codes/seed',
     { rows, replace: false },
   );
   return res.data;

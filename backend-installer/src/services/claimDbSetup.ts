@@ -711,16 +711,36 @@ CREATE TABLE IF NOT EXISTS aipn_rep_head_detail (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 `;
 
-export const AIPN_TABLES = ['aipn_rep_head', 'aipn_rep_head_detail'] as const;
+const PG_DDL_AIPN_ERROR = `
+CREATE TABLE IF NOT EXISTS aipn_error (
+  code         VARCHAR(20) PRIMARY KEY,
+  description  TEXT,
+  resolution   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+const MYSQL_DDL_AIPN_ERROR = `
+CREATE TABLE IF NOT EXISTS aipn_error (
+  code         VARCHAR(20) PRIMARY KEY,
+  description  TEXT,
+  resolution   TEXT,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+export const AIPN_TABLES = ['aipn_rep_head', 'aipn_rep_head_detail', 'aipn_error'] as const;
 export type AipnTableName = (typeof AIPN_TABLES)[number];
 
-/** สร้าง aipn_rep_head + aipn_rep_head_detail ในฐานข้อมูลปลายทาง — idempotent */
+/** สร้าง aipn_rep_head + aipn_rep_head_detail + aipn_error ในฐานข้อมูลปลายทาง — idempotent */
 export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesResult> {
   const created: string[] = [];
   try {
-    const [headDdl, detailDdl] = cached.type === 'postgresql'
-      ? [PG_DDL_AIPN_REP_HEAD, PG_DDL_AIPN_REP_HEAD_DETAIL]
-      : [MYSQL_DDL_AIPN_REP_HEAD, MYSQL_DDL_AIPN_REP_HEAD_DETAIL];
+    const [headDdl, detailDdl, errorDdl] = cached.type === 'postgresql'
+      ? [PG_DDL_AIPN_REP_HEAD, PG_DDL_AIPN_REP_HEAD_DETAIL, PG_DDL_AIPN_ERROR]
+      : [MYSQL_DDL_AIPN_REP_HEAD, MYSQL_DDL_AIPN_REP_HEAD_DETAIL, MYSQL_DDL_AIPN_ERROR];
 
     for (const stmt of splitStatements(headDdl)) {
       await runQuery(cached, stmt);
@@ -732,6 +752,11 @@ export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesR
     }
     created.push('aipn_rep_head_detail');
 
+    for (const stmt of splitStatements(errorDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('aipn_error');
+
     return { ok: true, created };
   } catch (err) {
     return {
@@ -742,9 +767,9 @@ export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesR
   }
 }
 
-/** ตรวจว่า aipn_rep_head + aipn_rep_head_detail มีอยู่ใน target DB หรือไม่ */
+/** ตรวจว่า aipn_rep_head + aipn_rep_head_detail + aipn_error มีอยู่ใน target DB หรือไม่ */
 export async function checkAipnTables(cached: CachedPool): Promise<Record<AipnTableName, boolean>> {
-  const result: Record<AipnTableName, boolean> = { aipn_rep_head: false, aipn_rep_head_detail: false };
+  const result: Record<AipnTableName, boolean> = { aipn_rep_head: false, aipn_rep_head_detail: false, aipn_error: false };
   for (const t of AIPN_TABLES) {
     try {
       const sql = cached.type === 'postgresql'

@@ -1128,4 +1128,71 @@ export async function claimQueryRoutes(app: FastifyInstance) {
       await closePool(pool);
     }
   });
+
+  /** GET /api/claim-db/aipn-error-codes — list ทั้งหมด (เหมือน csop-error-codes แต่ใช้ตาราง aipn_error) */
+  app.get('/claim-db/aipn-error-codes', async (request, reply) => {
+    const auth = request.auth!;
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      const r = await runQuery(pool, `SELECT code, description, resolution FROM aipn_error ORDER BY code`);
+      return {
+        codes: r.rows.map((row) => ({
+          code: String(row.code ?? ''),
+          description: row.description != null ? String(row.description) : null,
+          resolution: row.resolution != null ? String(row.resolution) : null,
+        })),
+        total: r.rows.length,
+      };
+    } catch (err) {
+      return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db/aipn-error-codes/seed — เพิ่มเฉพาะรหัสที่ยังไม่มีในตาราง (รหัสที่มีอยู่แล้ว → ข้าม ไม่แก้ทับ) */
+  app.post('/claim-db/aipn-error-codes/seed', async (request, reply) => {
+    const auth = request.auth!;
+    if (auth.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden', message: 'admin เท่านั้น' });
+    }
+    const parsed = eclaimErrorSeedSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
+    }
+    const rows = [...new Map(parsed.data.rows.map((r) => [r.code, r])).values()];
+
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      const existing = new Set<string>();
+      const checkChunkSize = 500;
+      for (let i = 0; i < rows.length; i += checkChunkSize) {
+        const codes = rows.slice(i, i + checkChunkSize).map((r) => sqlValueOrNull(r.code)).join(', ');
+        const r = await runQuery(pool, `SELECT code FROM aipn_error WHERE code IN (${codes})`);
+        for (const row of r.rows) existing.add(String(row.code));
+      }
+
+      const newRows = rows.filter((r) => !existing.has(r.code));
+      const insertChunkSize = 200;
+      for (let i = 0; i < newRows.length; i += insertChunkSize) {
+        const chunk = newRows.slice(i, i + insertChunkSize);
+        const values = chunk
+          .map((r) => `(${sqlValueOrNull(r.code)}, ${sqlValueOrNull(r.description)}, ${sqlValueOrNull(r.resolution)})`)
+          .join(', ');
+        await runQuery(pool, `INSERT INTO aipn_error (code, description, resolution) VALUES ${values}`);
+      }
+
+      return { ok: true, inserted: newRows.length, skipped: rows.length - newRows.length };
+    } catch (err) {
+      return reply.code(500).send({ error: 'SeedFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
 }
