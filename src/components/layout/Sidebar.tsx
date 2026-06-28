@@ -4,9 +4,7 @@ import {
   LayoutDashboard,
   ShieldCheck,
   Building,
-  GraduationCap,
   Zap,
-  Landmark,
   BedDouble,
   Table,
   FileText,
@@ -33,13 +31,15 @@ const ECLAIM_ITEMS: NavItem[] = [
   { path: '/claims',            label: 'เอกสารเคลม REP/STM',      icon: FileText },
   { path: '/eclaim/ofc-direct', label: 'สิทธิข้าราชการผู้ป่วยนอก [CSOP]', icon: ShieldCheck },
   { path: '/eclaim/cipn',       label: 'สิทธิข้าราชการผู้ป่วยใน [CIPN]',  icon: BedDouble },
-  { path: '/eclaim/ofc-local',  label: 'สิทธิอปท [LGO]',           icon: Landmark },
   { path: '/eclaim/sss',        label: 'สิทธิประกันสังคมผู้ป่วยนอก [SSOP]', icon: Building },
   { path: '/eclaim/aipn',       label: 'สิทธิประกันสังคมผู้ป่วยใน [AIPN]',  icon: BedDouble },
-  { path: '/eclaim/bkk',        label: 'สิทธิกทม. [BKK]',           icon: Building },
-  { path: '/eclaim/pvt',        label: 'สิทธิครูเอกชน [PVT]',       icon: GraduationCap },
   { path: '/eclaim/srt',        label: 'สิทธิการไฟฟ้า [SRT]',       icon: Zap },
 ];
+
+// ซ่อนไว้ — ต้องการใช้อีกครั้ง: ย้ายมาที่ ECLAIM_ITEMS ด้านบน + uncomment import icon ที่ใช้ (Landmark, GraduationCap)
+//   { path: '/eclaim/ofc-local', label: 'สิทธิอปท [LGO]',     icon: Landmark }
+//   { path: '/eclaim/bkk',       label: 'สิทธิกทม. [BKK]',     icon: Building }
+//   { path: '/eclaim/pvt',       label: 'สิทธิครูเอกชน [PVT]', icon: GraduationCap }
 
 // เมนูคลินิกทั้งกลุ่ม — ซ่อนทั้งหมวด (เปิดทีหลังเมื่อพร้อมใช้)
 const CLINICAL_ITEMS: NavItem[] = [];
@@ -80,15 +80,15 @@ function SidebarNavItem({ item, onClick }: { item: NavItem; onClick?: () => void
       end={item.path === '/'}
       onClick={onClick}
       className={({ isActive }) =>
-        `flex items-center gap-3 px-4 py-2.5 rounded-2xl text-sm font-medium transition-all ${
+        `flex items-start gap-3 px-4 py-2.5 rounded-2xl text-sm font-medium transition-all ${
           isActive
             ? 'bg-primary-600 text-white shadow-soft'
             : 'text-gray-600 hover:bg-primary-50 hover:text-primary-700'
         }`
       }
     >
-      <IconComponent className="flex-shrink-0 w-[18px] h-[18px]" />
-      <span className="truncate">{item.label}</span>
+      <IconComponent className="flex-shrink-0 w-[18px] h-[18px] mt-0.5" />
+      <span className="leading-snug">{item.label}</span>
     </NavLink>
   );
 }
