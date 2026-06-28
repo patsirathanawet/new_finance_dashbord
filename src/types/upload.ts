@@ -154,6 +154,137 @@ export interface SsopRepRecord {
   uploadedBy: string;
 }
 
+/** เอกสารตอบรับ ข้อมูลเบิกค่ารักษาพยาบาลผู้ป่วยนอกข้าราชการ (กรมบัญชีกลาง) — ไฟล์ COCDBIL/CSOPBITM/CSOPREX .BIL ใน .ZIP */
+export interface CsopBillItem {
+  checkCodes: string[];
+  rawFields: string[];
+  rawLine: string;
+}
+
+export interface CsopBillTran {
+  repline: number;
+  checkCodes: string[];
+  invoiceNo: string;
+  hn: string;
+  patientName: string;
+  pid: string;
+  amount: number;
+  claimAmt: number;
+  paid: number;
+  otherPay: number;
+  items: CsopBillItem[];
+}
+
+export interface CsopRepClaimLine {
+  lineNo: number;
+  status: 'passed' | 'failed';
+  station: string | null;
+  authCode: string | null;
+  dtTran: string | null;      // ISO datetime
+  invNo: string | null;
+  billNo: string | null;
+  hn: string | null;
+  memberNo: string | null;
+  claimAmt: number;
+  checkCodes: string[];
+  /** รายละเอียด BillItems ที่ตรวจไม่ผ่าน จากไฟล์ CSOPBITM ที่จับคู่ด้วย invNo */
+  billItemsDetail: CsopBillTran[];
+  /** รายละเอียดยาที่ตรวจไม่ผ่าน จากไฟล์ CSOPREX ที่จับคู่ด้วย invNo (โครงสร้างเดียวกับ SsopPrescription) */
+  drugDetail: SsopPrescription[];
+}
+
+export interface CsopRepRecord {
+  id: string;               // ackNo (unique key — PK ของ csop_rep_head)
+  ackNo: string;
+  docType: string;
+  hospitalCode: string;
+  batchRef: string;
+  station: string | null;
+  ackAt: string | null;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+  claimLines: CsopRepClaimLine[];
+  fileName: string;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
+/** เอกสารตอบรับข้อมูลผู้ป่วยใน ประกันสังคม — ไฟล์ SIGNREP/SIGNSUP .REP ใน .ZIP */
+export interface AipnBillItem {
+  checkCodes: string[];
+  sequence: string | null;
+  billGrCs: string | null;
+  lcCode: string | null;
+  csCode: string | null;
+  stdCode: string | null;
+  descript: string | null;
+  qty: number | null;
+  unitPrice: number | null;
+  chargeAmt: number | null;
+  claimUp: number | null;
+  claimAmount: number | null;
+  rawLine: string;
+}
+
+export interface AipnSubLineEntry {
+  checkCodes: string[];
+  rawFields: string[];
+  rawLine: string;
+}
+
+export interface AipnSubDetail {
+  an: string;
+  hn: string;
+  patientName: string;
+  pid: string;
+  status: 'passed' | 'failed';
+  checkCodes: string[];
+  dx: AipnSubLineEntry[];
+  proc: AipnSubLineEntry[];
+  billItems: AipnBillItem[];
+}
+
+export interface AipnRepClaimLine {
+  lineNo: number;
+  pcode: string;
+  status: 'passed' | 'failed';
+  iptype: string;
+  careAs: string;
+  ss: string;
+  hmain: string;
+  hcare: string;
+  an: string;
+  drg: string;
+  rw: number | null;
+  adjrw: string | null;       // เก็บ raw เพราะมี format พิเศษ "rw X ccuf" ได้
+  serviceType: string | null;
+  serviceSubtype: string | null;
+  pt: string | null;
+  amount: number;
+  patientName: string;
+  checkCodes: string[];
+  /** รายละเอียด Dx/Proc/BillItems จากไฟล์ SIGNSUP ที่จับคู่ด้วย AN */
+  subDetail: AipnSubDetail | null;
+}
+
+export interface AipnRepRecord {
+  id: string;               // ackNo (unique key — PK ของ aipn_rep_head)
+  ackNo: string;
+  docType: string;
+  hospitalCode: string;
+  batchNo: string | null;
+  batchRef: string | null;
+  ackAt: string | null;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+  claimLines: AipnRepClaimLine[];
+  fileName: string;
+  uploadedAt: string;
+  uploadedBy: string;
+}
+
 export type UploadFileType = 'REP' | 'STM';
 
 export interface UploadHistoryItem {

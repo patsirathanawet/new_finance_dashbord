@@ -45,7 +45,44 @@ const ssopRepImportSchema = z.object({
 
 type SsopRepImportPayload = z.infer<typeof ssopRepImportSchema>;
 
+const csopImportSchema = z.object({
+  ackNo: z.string().min(1),
+  docType: z.string().optional().default('OPD_BILL'),
+  hospitalCode: z.string().optional().default(''),
+  batchRef: z.string().optional().default(''),
+  station: z.string().optional().default(''),
+  ackAt: z.string().optional().default(''),
+  totalSubmitted: z.number().int().nonnegative(),
+  totalPassed: z.number().int().nonnegative(),
+  totalFailed: z.number().int().nonnegative(),
+  detailRows: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
+type CsopImportPayload = z.infer<typeof csopImportSchema>;
+
+const aipnImportSchema = z.object({
+  ackNo: z.string().min(1),
+  docType: z.string().optional().default('IPD_BILL'),
+  hospitalCode: z.string().optional().default(''),
+  batchNo: z.string().optional().default(''),
+  batchRef: z.string().optional().default(''),
+  ackAt: z.string().optional().default(''),
+  totalSubmitted: z.number().int().nonnegative(),
+  totalPassed: z.number().int().nonnegative(),
+  totalFailed: z.number().int().nonnegative(),
+  detailRows: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+
+type AipnImportPayload = z.infer<typeof aipnImportSchema>;
+
 /* ---------- Helpers ---------- */
+
+/** คอลัมน์ที่เก็บ JSON ในตาราง detail ต่างๆ — ต้อง JSON.stringify ก่อน insert */
+const JSON_COLUMNS = new Set(['drug_detail', 'bill_items_detail', 'sub_detail']);
+
+function sqlValueMaybeJson(col: string, v: unknown): string {
+  return sqlValue(JSON_COLUMNS.has(col) && v !== null && v !== undefined ? JSON.stringify(v) : v);
+}
 
 async function openClaimPool(hospitalId: string): Promise<CachedPool> {
   const cfg = await prisma.claimDbConfig.findFirst({
@@ -180,9 +217,7 @@ async function insertSsopRepDetails(
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize);
     const values = chunk
-      .map((row) => `(${SSOP_REP_DETAIL_COLUMNS.map((c) => sqlValue(
-        c === 'drug_detail' && row[c] !== null && row[c] !== undefined ? JSON.stringify(row[c]) : row[c]
-      )).join(', ')})`)
+      .map((row) => `(${SSOP_REP_DETAIL_COLUMNS.map((c) => sqlValueMaybeJson(c, row[c])).join(', ')})`)
       .join(', ');
     const sql = `INSERT INTO ssop_rep_detail (${cols}) VALUES ${values}`;
     await runQuery(pool, sql);
@@ -210,6 +245,119 @@ async function insertSsopRepHead(pool: CachedPool, p: SsopRepImportPayload): Pro
     sqlValue(p.totalFailed),
   ];
   const sql = `INSERT INTO ssop_rep_head (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
+  await runQuery(pool, sql);
+}
+
+/** ตรวจสอบว่า ack_no มีอยู่ใน csop_rep_head ของ target DB หรือไม่ */
+async function csopAckNoExists(pool: CachedPool, ackNo: string): Promise<boolean> {
+  const escaped = ackNo.replace(/'/g, "''");
+  const sql = `SELECT 1 FROM csop_rep_head WHERE ack_no = '${escaped}' LIMIT 1`;
+  const r = await runQuery(pool, sql);
+  return r.rows.length > 0;
+}
+
+const CSOP_DETAIL_COLUMNS = [
+  'ack_no', 'line_no', 'status', 'station', 'auth_code', 'dt_tran', 'inv_no', 'bill_no',
+  'hn', 'member_no', 'claim_amt', 'check_codes', 'bill_items_detail', 'drug_detail',
+] as const;
+
+/** Bulk insert csop_rep_head_detail — แบ่งเป็น chunk เพื่อกัน SQL ยาวเกิน */
+async function insertCsopDetails(
+  pool: CachedPool,
+  rows: Record<string, unknown>[],
+  chunkSize = 100,
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const cols = CSOP_DETAIL_COLUMNS.join(', ');
+  let inserted = 0;
+
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const values = chunk
+      .map((row) => `(${CSOP_DETAIL_COLUMNS.map((c) => sqlValueMaybeJson(c, row[c])).join(', ')})`)
+      .join(', ');
+    const sql = `INSERT INTO csop_rep_head_detail (${cols}) VALUES ${values}`;
+    await runQuery(pool, sql);
+    inserted += chunk.length;
+  }
+  return inserted;
+}
+
+async function insertCsopHead(pool: CachedPool, p: CsopImportPayload): Promise<void> {
+  const cols = [
+    'ack_no', 'doc_type', 'hospital_code', 'batch_ref', 'station', 'ack_at',
+    'total_submitted', 'total_passed', 'total_failed',
+  ];
+  const vals = [
+    sqlValue(p.ackNo),
+    sqlValue(p.docType || 'OPD_BILL'),
+    sqlValue(p.hospitalCode || null),
+    sqlValue(p.batchRef || null),
+    sqlValue(p.station || null),
+    sqlValue(p.ackAt || null),
+    sqlValue(p.totalSubmitted),
+    sqlValue(p.totalPassed),
+    sqlValue(p.totalFailed),
+  ];
+  const sql = `INSERT INTO csop_rep_head (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
+  await runQuery(pool, sql);
+}
+
+/** ตรวจสอบว่า ack_no มีอยู่ใน aipn_rep_head ของ target DB หรือไม่ */
+async function aipnAckNoExists(pool: CachedPool, ackNo: string): Promise<boolean> {
+  const escaped = ackNo.replace(/'/g, "''");
+  const sql = `SELECT 1 FROM aipn_rep_head WHERE ack_no = '${escaped}' LIMIT 1`;
+  const r = await runQuery(pool, sql);
+  return r.rows.length > 0;
+}
+
+const AIPN_DETAIL_COLUMNS = [
+  'ack_no', 'line_no', 'status', 'pcode', 'iptype', 'care_as', 'ss', 'hmain', 'hcare',
+  'an', 'drg', 'rw', 'adjrw', 'service_type', 'service_subtype', 'pt', 'amount',
+  'patient_name', 'check_codes', 'sub_detail',
+] as const;
+
+/** Bulk insert aipn_rep_head_detail — แบ่งเป็น chunk เพื่อกัน SQL ยาวเกิน */
+async function insertAipnDetails(
+  pool: CachedPool,
+  rows: Record<string, unknown>[],
+  chunkSize = 100,
+): Promise<number> {
+  if (rows.length === 0) return 0;
+
+  const cols = AIPN_DETAIL_COLUMNS.join(', ');
+  let inserted = 0;
+
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const values = chunk
+      .map((row) => `(${AIPN_DETAIL_COLUMNS.map((c) => sqlValueMaybeJson(c, row[c])).join(', ')})`)
+      .join(', ');
+    const sql = `INSERT INTO aipn_rep_head_detail (${cols}) VALUES ${values}`;
+    await runQuery(pool, sql);
+    inserted += chunk.length;
+  }
+  return inserted;
+}
+
+async function insertAipnHead(pool: CachedPool, p: AipnImportPayload): Promise<void> {
+  const cols = [
+    'ack_no', 'doc_type', 'hospital_code', 'batch_no', 'batch_ref', 'ack_at',
+    'total_submitted', 'total_passed', 'total_failed',
+  ];
+  const vals = [
+    sqlValue(p.ackNo),
+    sqlValue(p.docType || 'IPD_BILL'),
+    sqlValue(p.hospitalCode || null),
+    sqlValue(p.batchNo || null),
+    sqlValue(p.batchRef || null),
+    sqlValue(p.ackAt || null),
+    sqlValue(p.totalSubmitted),
+    sqlValue(p.totalPassed),
+    sqlValue(p.totalFailed),
+  ];
+  const sql = `INSERT INTO aipn_rep_head (${cols.join(', ')}) VALUES (${vals.join(', ')})`;
   await runQuery(pool, sql);
 }
 
@@ -318,6 +466,126 @@ export async function claimImportRoutes(app: FastifyInstance) {
       audit(request, {
         action: 'claim-db.ssop-rep-import',
         targetType: 'ssop_rep_head',
+        targetId: payload.ackNo,
+        metadata: {
+          totalSubmitted: payload.totalSubmitted,
+          totalPassed: payload.totalPassed,
+          detailRows: inserted,
+        },
+      });
+
+      return {
+        alreadyImported: false,
+        ackNo: payload.ackNo,
+        headInserted: 1,
+        detailInserted: inserted,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: 'ImportFailed', message: msg });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db/csop-import
+   *   1. ตรวจ ack_no ใน csop_rep_head → ถ้ามีอยู่แล้ว return alreadyImported: true
+   *   2. INSERT csop_rep_head + bulk INSERT csop_rep_head_detail
+   */
+  app.post('/claim-db/csop-import', async (request, reply) => {
+    const auth = request.auth!;
+    const parsed = csopImportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
+    }
+    const payload = parsed.data;
+
+    let pool: CachedPool;
+    try {
+      pool = await openClaimPool(auth.hospitalId);
+    } catch (err) {
+      return reply.code(412).send({
+        error: 'ClaimDbNotConfigured',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const exists = await csopAckNoExists(pool, payload.ackNo);
+      if (exists) {
+        return reply.code(200).send({
+          alreadyImported: true,
+          ackNo: payload.ackNo,
+          message: `เลขที่ตอบรับ ${payload.ackNo} มีการนำเข้าแล้ว`,
+        });
+      }
+
+      await insertCsopHead(pool, payload);
+      const inserted = await insertCsopDetails(pool, payload.detailRows);
+
+      audit(request, {
+        action: 'claim-db.csop-import',
+        targetType: 'csop_rep_head',
+        targetId: payload.ackNo,
+        metadata: {
+          totalSubmitted: payload.totalSubmitted,
+          totalPassed: payload.totalPassed,
+          detailRows: inserted,
+        },
+      });
+
+      return {
+        alreadyImported: false,
+        ackNo: payload.ackNo,
+        headInserted: 1,
+        detailInserted: inserted,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.code(500).send({ error: 'ImportFailed', message: msg });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db/aipn-import
+   *   1. ตรวจ ack_no ใน aipn_rep_head → ถ้ามีอยู่แล้ว return alreadyImported: true
+   *   2. INSERT aipn_rep_head + bulk INSERT aipn_rep_head_detail
+   */
+  app.post('/claim-db/aipn-import', async (request, reply) => {
+    const auth = request.auth!;
+    const parsed = aipnImportSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
+    }
+    const payload = parsed.data;
+
+    let pool: CachedPool;
+    try {
+      pool = await openClaimPool(auth.hospitalId);
+    } catch (err) {
+      return reply.code(412).send({
+        error: 'ClaimDbNotConfigured',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const exists = await aipnAckNoExists(pool, payload.ackNo);
+      if (exists) {
+        return reply.code(200).send({
+          alreadyImported: true,
+          ackNo: payload.ackNo,
+          message: `เลขที่ตอบรับ ${payload.ackNo} มีการนำเข้าแล้ว`,
+        });
+      }
+
+      await insertAipnHead(pool, payload);
+      const inserted = await insertAipnDetails(pool, payload.detailRows);
+
+      audit(request, {
+        action: 'claim-db.aipn-import',
+        targetType: 'aipn_rep_head',
         targetId: payload.ackNo,
         metadata: {
           totalSubmitted: payload.totalSubmitted,

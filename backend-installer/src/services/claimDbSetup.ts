@@ -438,3 +438,321 @@ export async function checkSsopRepTables(cached: CachedPool): Promise<Record<Sso
   }
   return result;
 }
+
+/* ========================================================================
+ * CSOP — เอกสารตอบรับ ข้อมูลเบิกค่ารักษาพยาบาลผู้ป่วยนอกข้าราชการ (กรมบัญชีกลาง)
+ * แทนที่ rep_head/rep_detail/eclaim_error เดิม ด้วยโครงสร้างใหม่ตามไฟล์จริง
+ * (COCDBIL = head + claim line, CSOPBITM = รายละเอียด BillItems ที่ไม่ผ่าน,
+ *  CSOPREX = รายละเอียดยาที่ไม่ผ่าน — รูปแบบเดียวกับ ssop_rep_detail.drug_detail)
+ *
+ *   csop_rep_head        — สรุปต่อเลขที่ตอบรับ (PK = ack_no)
+ *   csop_rep_head_detail — รายการเบิกแต่ละบรรทัด (1 row ต่อ claim line จากไฟล์ COCDBIL)
+ *                          คอลัมน์ตรงกับ "รูปแบบรายการ" ในไฟล์ COCDBIL เป๊ะ:
+ *                          *| Stat, Station, Line, AuthCode, DTTran, InvNo, BillNo, HN, MemberNo, ClaimAmt |CheckCode
+ *                          bill_items_detail (JSON) จาก CSOPBITM — โครงสร้างย่อยไม่มีสเปกทางการระบุไว้ในไฟล์
+ *                          (อ้างถึง "เอกสารข้อกำหนดฯ CSOP รุ่น 0.93" ภายนอก) จึงเก็บแบบ raw fields ไว้ก่อน
+ *                          drug_detail (JSON) จาก CSOPREX — สเปกเดียวกับ ssop_rep_detail.drug_detail
+ *   csop_error           — รหัส error ของ CSOP (โครงสร้างเหมือน eclaim_error เดิมทุกอย่าง)
+ * ========================================================================= */
+
+const PG_DDL_CSOP_REP_HEAD = `
+CREATE TABLE IF NOT EXISTS csop_rep_head (
+  ack_no           VARCHAR(50) PRIMARY KEY,
+  doc_type         VARCHAR(20) NOT NULL DEFAULT 'OPD_BILL',
+  hospital_code    VARCHAR(10),
+  batch_ref        TEXT,
+  station          VARCHAR(10),
+  ack_at           TIMESTAMPTZ,
+  total_submitted  INT NOT NULL DEFAULT 0,
+  total_passed     INT NOT NULL DEFAULT 0,
+  total_failed     INT NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_csop_rep_head_hospital ON csop_rep_head(hospital_code);
+`;
+
+const PG_DDL_CSOP_REP_HEAD_DETAIL = `
+CREATE TABLE IF NOT EXISTS csop_rep_head_detail (
+  id                BIGSERIAL PRIMARY KEY,
+  ack_no            VARCHAR(50) NOT NULL,
+  line_no           INT,
+  status            VARCHAR(10),             -- passed / failed (จาก A / C)
+  station           VARCHAR(10),
+  auth_code         VARCHAR(50),
+  dt_tran           TIMESTAMPTZ,
+  inv_no            VARCHAR(50),
+  bill_no           VARCHAR(100),            -- อาจมีหลายค่าคั่นด้วย , ในรายการเดียว (ตามไฟล์จริง)
+  hn                VARCHAR(50),
+  member_no         VARCHAR(50),
+  claim_amt         NUMERIC(15,2),
+  check_codes       VARCHAR(200),
+  bill_items_detail JSONB,                   -- จาก CSOPBITM (เฉพาะรายการไม่ผ่าน)
+  drug_detail       JSONB,                   -- จาก CSOPREX (เฉพาะรายการไม่ผ่าน)
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_csop_rep_head_detail_ack_no ON csop_rep_head_detail(ack_no);
+CREATE INDEX IF NOT EXISTS idx_csop_rep_head_detail_inv_no ON csop_rep_head_detail(inv_no);
+CREATE INDEX IF NOT EXISTS idx_csop_rep_head_detail_hn ON csop_rep_head_detail(hn);
+`;
+
+const PG_DDL_CSOP_ERROR = `
+CREATE TABLE IF NOT EXISTS csop_error (
+  code         VARCHAR(20) PRIMARY KEY,
+  description  TEXT,
+  resolution   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
+const MYSQL_DDL_CSOP_REP_HEAD = `
+CREATE TABLE IF NOT EXISTS csop_rep_head (
+  ack_no           VARCHAR(50) PRIMARY KEY,
+  doc_type         VARCHAR(20) NOT NULL DEFAULT 'OPD_BILL',
+  hospital_code    VARCHAR(10),
+  batch_ref        TEXT,
+  station          VARCHAR(10),
+  ack_at           DATETIME,
+  total_submitted  INT NOT NULL DEFAULT 0,
+  total_passed     INT NOT NULL DEFAULT 0,
+  total_failed     INT NOT NULL DEFAULT 0,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_csop_rep_head_hospital (hospital_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+const MYSQL_DDL_CSOP_REP_HEAD_DETAIL = `
+CREATE TABLE IF NOT EXISTS csop_rep_head_detail (
+  id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+  ack_no            VARCHAR(50) NOT NULL,
+  line_no           INT,
+  status            VARCHAR(10),
+  station           VARCHAR(10),
+  auth_code         VARCHAR(50),
+  dt_tran           DATETIME,
+  inv_no            VARCHAR(50),
+  bill_no           VARCHAR(100),
+  hn                VARCHAR(50),
+  member_no         VARCHAR(50),
+  claim_amt         DECIMAL(15,2),
+  check_codes       VARCHAR(200),
+  bill_items_detail JSON,
+  drug_detail       JSON,
+  created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_csop_rep_head_detail_ack_no (ack_no),
+  INDEX idx_csop_rep_head_detail_inv_no (inv_no),
+  INDEX idx_csop_rep_head_detail_hn (hn)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+const MYSQL_DDL_CSOP_ERROR = `
+CREATE TABLE IF NOT EXISTS csop_error (
+  code         VARCHAR(20) PRIMARY KEY,
+  description  TEXT,
+  resolution   TEXT,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+export const CSOP_TABLES = ['csop_rep_head', 'csop_rep_head_detail', 'csop_error'] as const;
+export type CsopTableName = (typeof CSOP_TABLES)[number];
+
+/** สร้าง csop_rep_head + csop_rep_head_detail + csop_error ในฐานข้อมูลปลายทาง — idempotent */
+export async function createCsopTables(cached: CachedPool): Promise<ClaimTablesResult> {
+  const created: string[] = [];
+  try {
+    const [headDdl, detailDdl, errorDdl] = cached.type === 'postgresql'
+      ? [PG_DDL_CSOP_REP_HEAD, PG_DDL_CSOP_REP_HEAD_DETAIL, PG_DDL_CSOP_ERROR]
+      : [MYSQL_DDL_CSOP_REP_HEAD, MYSQL_DDL_CSOP_REP_HEAD_DETAIL, MYSQL_DDL_CSOP_ERROR];
+
+    for (const stmt of splitStatements(headDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('csop_rep_head');
+
+    for (const stmt of splitStatements(detailDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('csop_rep_head_detail');
+
+    for (const stmt of splitStatements(errorDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('csop_error');
+
+    return { ok: true, created };
+  } catch (err) {
+    return {
+      ok: false,
+      created,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** ตรวจว่า csop_rep_head + csop_rep_head_detail + csop_error มีอยู่ใน target DB หรือไม่ */
+export async function checkCsopTables(cached: CachedPool): Promise<Record<CsopTableName, boolean>> {
+  const result: Record<CsopTableName, boolean> = { csop_rep_head: false, csop_rep_head_detail: false, csop_error: false };
+  for (const t of CSOP_TABLES) {
+    try {
+      const sql = cached.type === 'postgresql'
+        ? `SELECT 1 FROM information_schema.tables WHERE table_name = '${t}' LIMIT 1`
+        : `SELECT 1 FROM information_schema.tables WHERE table_name = '${t}' AND table_schema = DATABASE() LIMIT 1`;
+      const r = await runQuery(cached, sql);
+      result[t] = r.rows.length > 0;
+    } catch { /* ignore */ }
+  }
+  return result;
+}
+
+/* ========================================================================
+ * AIPN — เอกสารตอบรับข้อมูลผู้ป่วยใน ประกันสังคม
+ * (SIGNREP = head + claim line, SIGNSUP = รายละเอียด Dx/Proc/BillItems)
+ *
+ *   aipn_rep_head        — สรุปต่อเลขที่ตอบรับ (PK = ack_no)
+ *   aipn_rep_head_detail — รายการเบิกแต่ละราย (1 row ต่อ claim line จากไฟล์ SIGNREP)
+ *                          คอลัมน์ตรงกับ "รูปแบบรายการ" ในไฟล์ SIGNREP เป๊ะ:
+ *                          *| pcode tcode iptype CareAs, SS, HMain, HCare, AN, DRG, rw, adjrw, ST, SST, PT, Amt, name[:err...]
+ *                          sub_detail (JSON) จาก SIGNSUP — เก็บ dx[]/proc[]/billItems[] ของ AN เดียวกัน
+ * ========================================================================= */
+
+const PG_DDL_AIPN_REP_HEAD = `
+CREATE TABLE IF NOT EXISTS aipn_rep_head (
+  ack_no           VARCHAR(50) PRIMARY KEY,
+  doc_type         VARCHAR(20) NOT NULL DEFAULT 'IPD_BILL',
+  hospital_code    VARCHAR(10),
+  batch_no         VARCHAR(20),
+  batch_ref        VARCHAR(100),
+  ack_at           TIMESTAMPTZ,
+  total_submitted  INT NOT NULL DEFAULT 0,
+  total_passed     INT NOT NULL DEFAULT 0,
+  total_failed     INT NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_aipn_rep_head_hospital ON aipn_rep_head(hospital_code);
+`;
+
+const PG_DDL_AIPN_REP_HEAD_DETAIL = `
+CREATE TABLE IF NOT EXISTS aipn_rep_head_detail (
+  id              BIGSERIAL PRIMARY KEY,
+  ack_no          VARCHAR(50) NOT NULL,
+  line_no         INT,
+  status          VARCHAR(10),       -- passed / failed (จาก A / C)
+  pcode           VARCHAR(5),
+  iptype          VARCHAR(5),
+  care_as         VARCHAR(5),
+  ss              VARCHAR(5),
+  hmain           VARCHAR(10),
+  hcare           VARCHAR(10),
+  an              VARCHAR(30),
+  drg             VARCHAR(20),
+  rw              NUMERIC(10,4),
+  adjrw           VARCHAR(30),       -- เก็บ raw เพราะมี format พิเศษ "rw X ccuf" ได้ (กรณี SSO Cancer Care)
+  service_type    VARCHAR(20),       -- ST
+  service_subtype VARCHAR(20),       -- SST
+  pt              VARCHAR(5),
+  amount          NUMERIC(15,2),
+  patient_name    VARCHAR(200),
+  check_codes     VARCHAR(200),
+  sub_detail      JSONB,             -- จาก SIGNSUP: dx[]/proc[]/billItems[] ของ AN เดียวกัน
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_aipn_rep_head_detail_ack_no ON aipn_rep_head_detail(ack_no);
+CREATE INDEX IF NOT EXISTS idx_aipn_rep_head_detail_an ON aipn_rep_head_detail(an);
+`;
+
+const MYSQL_DDL_AIPN_REP_HEAD = `
+CREATE TABLE IF NOT EXISTS aipn_rep_head (
+  ack_no           VARCHAR(50) PRIMARY KEY,
+  doc_type         VARCHAR(20) NOT NULL DEFAULT 'IPD_BILL',
+  hospital_code    VARCHAR(10),
+  batch_no         VARCHAR(20),
+  batch_ref        VARCHAR(100),
+  ack_at           DATETIME,
+  total_submitted  INT NOT NULL DEFAULT 0,
+  total_passed     INT NOT NULL DEFAULT 0,
+  total_failed     INT NOT NULL DEFAULT 0,
+  created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_aipn_rep_head_hospital (hospital_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+const MYSQL_DDL_AIPN_REP_HEAD_DETAIL = `
+CREATE TABLE IF NOT EXISTS aipn_rep_head_detail (
+  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+  ack_no          VARCHAR(50) NOT NULL,
+  line_no         INT,
+  status          VARCHAR(10),
+  pcode           VARCHAR(5),
+  iptype          VARCHAR(5),
+  care_as         VARCHAR(5),
+  ss              VARCHAR(5),
+  hmain           VARCHAR(10),
+  hcare           VARCHAR(10),
+  an              VARCHAR(30),
+  drg             VARCHAR(20),
+  rw              DECIMAL(10,4),
+  adjrw           VARCHAR(30),
+  service_type    VARCHAR(20),
+  service_subtype VARCHAR(20),
+  pt              VARCHAR(5),
+  amount          DECIMAL(15,2),
+  patient_name    VARCHAR(200),
+  check_codes     VARCHAR(200),
+  sub_detail      JSON,
+  created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_aipn_rep_head_detail_ack_no (ack_no),
+  INDEX idx_aipn_rep_head_detail_an (an)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+`;
+
+export const AIPN_TABLES = ['aipn_rep_head', 'aipn_rep_head_detail'] as const;
+export type AipnTableName = (typeof AIPN_TABLES)[number];
+
+/** สร้าง aipn_rep_head + aipn_rep_head_detail ในฐานข้อมูลปลายทาง — idempotent */
+export async function createAipnTables(cached: CachedPool): Promise<ClaimTablesResult> {
+  const created: string[] = [];
+  try {
+    const [headDdl, detailDdl] = cached.type === 'postgresql'
+      ? [PG_DDL_AIPN_REP_HEAD, PG_DDL_AIPN_REP_HEAD_DETAIL]
+      : [MYSQL_DDL_AIPN_REP_HEAD, MYSQL_DDL_AIPN_REP_HEAD_DETAIL];
+
+    for (const stmt of splitStatements(headDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('aipn_rep_head');
+
+    for (const stmt of splitStatements(detailDdl)) {
+      await runQuery(cached, stmt);
+    }
+    created.push('aipn_rep_head_detail');
+
+    return { ok: true, created };
+  } catch (err) {
+    return {
+      ok: false,
+      created,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** ตรวจว่า aipn_rep_head + aipn_rep_head_detail มีอยู่ใน target DB หรือไม่ */
+export async function checkAipnTables(cached: CachedPool): Promise<Record<AipnTableName, boolean>> {
+  const result: Record<AipnTableName, boolean> = { aipn_rep_head: false, aipn_rep_head_detail: false };
+  for (const t of AIPN_TABLES) {
+    try {
+      const sql = cached.type === 'postgresql'
+        ? `SELECT 1 FROM information_schema.tables WHERE table_name = '${t}' LIMIT 1`
+        : `SELECT 1 FROM information_schema.tables WHERE table_name = '${t}' AND table_schema = DATABASE() LIMIT 1`;
+      const r = await runQuery(cached, sql);
+      result[t] = r.rows.length > 0;
+    } catch { /* ignore */ }
+  }
+  return result;
+}

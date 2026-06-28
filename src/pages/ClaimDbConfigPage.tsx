@@ -5,9 +5,10 @@ import {
 } from 'lucide-react';
 import {
   getClaimDbConfig, testClaimDbConfig, saveClaimDbConfig,
-  createClaimTables, checkClaimTables,
+  createCsopTables, checkCsopTables,
   createSsopRepTables, checkSsopRepTables,
-  listEclaimErrorCodes, seedEclaimErrorCodes,
+  createAipnTables, checkAipnTables,
+  listCsopErrorCodes, seedCsopErrorCodes,
   extractErrorMessage,
   type HosxpDbType, type TestConnectionResult, type ClaimDbConfigState, type EclaimErrorCode,
 } from '../lib/backendApi';
@@ -31,6 +32,60 @@ const DEFAULT_FORM: FormState = {
   password: '',
 };
 
+/** กล่องแสดงปลายทางที่จะสร้างตาราง — ใช้ซ้ำทุกหัวข้อ (CSOP/SSOP/AIPN) */
+function TargetDbBanner({ serverState }: { serverState: ClaimDbConfigState | null }) {
+  if (serverState?.configured) {
+    return (
+      <div className="bg-primary-50 border border-primary-100 rounded-2xl px-4 py-3 flex items-start gap-2.5">
+        <Database className="w-4 h-4 text-primary-600 flex-shrink-0 mt-0.5" />
+        <div className="text-xs">
+          <p className="font-semibold text-primary-800">จะสร้างไปที่ฐานข้อมูลปลายทางนี้:</p>
+          <p className="font-mono text-primary-700 mt-0.5 break-all">
+            {serverState.dbType}://{serverState.username}@{serverState.host}:{serverState.port}/<strong>{serverState.database}</strong>
+          </p>
+          <p className="text-primary-600/70 mt-1">
+            (ค่าจาก connection ที่บันทึกไว้ในฟอร์มด้านบน — แก้ค่าแล้ว "บันทึก" ใหม่ก่อนกด)
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 text-xs text-amber-700">
+      ⚠ ยังไม่ได้บันทึก connection — กรอกฟอร์มด้านบนแล้วกด "บันทึก" ก่อน
+    </div>
+  );
+}
+
+/** กริดแสดงสถานะตาราง (มีอยู่ / ยังไม่มี) — ใช้ซ้ำทุกหัวข้อ */
+function TablesStatusGrid<T extends string>({ status, tables }: { status: Record<T, boolean> | null; tables: readonly T[] }) {
+  if (!status) return null;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {tables.map((t) => (
+        <div
+          key={t}
+          className={`flex items-center gap-2 px-3 py-2 rounded-2xl text-sm ${status[t] ? 'bg-emerald-50' : 'bg-gray-50'}`}
+        >
+          {status[t] ? (
+            <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-gray-400 flex-shrink-0" />
+          )}
+          <span className="font-mono text-xs flex-1">{t}</span>
+          <span className={`text-xs font-medium ${status[t] ? 'text-emerald-700' : 'text-gray-500'}`}>
+            {status[t] ? 'มีอยู่' : 'ยังไม่มี'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CSOP_TABLE_NAMES = ['csop_rep_head', 'csop_rep_head_detail', 'csop_error'] as const;
+const SSOP_TABLE_NAMES = ['ssop_rep_head', 'ssop_rep_detail'] as const;
+const AIPN_TABLE_NAMES = ['aipn_rep_head', 'aipn_rep_head_detail'] as const;
+
 export default function ClaimDbConfigPage() {
   const isAdmin = useSessionStore((s) => s.isAdmin);
 
@@ -47,16 +102,22 @@ export default function ClaimDbConfigPage() {
   const [saveError, setSaveError] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const [creating, setCreating] = useState(false);
-  const [createResult, setCreateResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // หัวข้อ CSOP — แทนที่ rep_head/rep_detail/eclaim_error เดิมทั้งหมด
+  const [creatingCsop, setCreatingCsop] = useState(false);
+  const [createCsopResult, setCreateCsopResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [csopTablesStatus, setCsopTablesStatus] = useState<Record<(typeof CSOP_TABLE_NAMES)[number], boolean> | null>(null);
 
-  const [tablesStatus, setTablesStatus] = useState<{ rep_head: boolean; rep_detail: boolean; eclaim_error: boolean } | null>(null);
-
+  // หัวข้อ SSOP — ของเดิม ไม่เปลี่ยน
   const [creatingSsop, setCreatingSsop] = useState(false);
   const [createSsopResult, setCreateSsopResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [ssopTablesStatus, setSsopTablesStatus] = useState<{ ssop_rep_head: boolean; ssop_rep_detail: boolean } | null>(null);
+  const [ssopTablesStatus, setSsopTablesStatus] = useState<Record<(typeof SSOP_TABLE_NAMES)[number], boolean> | null>(null);
 
-  // Error code import
+  // หัวข้อ AIPN — ใหม่
+  const [creatingAipn, setCreatingAipn] = useState(false);
+  const [createAipnResult, setCreateAipnResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [aipnTablesStatus, setAipnTablesStatus] = useState<Record<(typeof AIPN_TABLE_NAMES)[number], boolean> | null>(null);
+
+  // Import error code — ของหัวข้อ CSOP (csop_error)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -66,7 +127,7 @@ export default function ClaimDbConfigPage() {
     if (!value) return false;
     const text = String(value);
     if (text.includes('�')) return true;
-    return /[ÃÂà¸à¹âï¿½]/.test(text);
+    return /[ÃÂà¸à¹âï¿½]/.test(text);
   }
 
   function findEncodingIssues(rows: EclaimErrorCode[]): string | null {
@@ -96,16 +157,17 @@ export default function ClaimDbConfigPage() {
         setUsernameTouched(false);
         // ตรวจตารางในปลายทาง + count error codes
         try {
-          const ts = await checkClaimTables();
-          setTablesStatus(ts);
-          if (ts.eclaim_error) {
+          const ts = await checkCsopTables();
+          setCsopTablesStatus(ts);
+          if (ts.csop_error) {
             try {
-              const list = await listEclaimErrorCodes();
+              const list = await listCsopErrorCodes();
               setErrorCodesCount(list.total);
             } catch { /* ignore */ }
           }
         } catch { /* ignore */ }
         try { setSsopTablesStatus(await checkSsopRepTables()); } catch { /* ignore */ }
+        try { setAipnTablesStatus(await checkAipnTables()); } catch { /* ignore */ }
       }
     } catch (e) {
       console.error('load claim-db-config failed', e);
@@ -114,7 +176,7 @@ export default function ClaimDbConfigPage() {
     }
   }, []);
 
-  /** Import xlsx → parse 3 columns (code, description, resolution) → bulk upsert */
+  /** Import xlsx → parse 3 columns (code, description, resolution) → bulk upsert ลง csop_error */
   const handleImportFile = async (file: File) => {
     setImporting(true);
     setImportResult(null);
@@ -149,7 +211,7 @@ export default function ClaimDbConfigPage() {
         return;
       }
 
-      const result = await seedEclaimErrorCodes(dataRows, true);
+      const result = await seedCsopErrorCodes(dataRows, true);
       setImportResult({ ok: true, message: `import ${result.upserted} รหัสสำเร็จ` });
       setErrorCodesCount(result.upserted);
     } catch (e) {
@@ -216,22 +278,22 @@ export default function ClaimDbConfigPage() {
     }
   };
 
-  const handleCreateTables = async () => {
-    setCreating(true);
-    setCreateResult(null);
+  const handleCreateCsopTables = async () => {
+    setCreatingCsop(true);
+    setCreateCsopResult(null);
     try {
-      const r = await createClaimTables();
+      const r = await createCsopTables();
       if (r.ok) {
-        setCreateResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
+        setCreateCsopResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
       } else {
-        setCreateResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
+        setCreateCsopResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
       }
-      try { setTablesStatus(await checkClaimTables()); } catch { /* ignore */ }
+      try { setCsopTablesStatus(await checkCsopTables()); } catch { /* ignore */ }
       await reload();
     } catch (e) {
-      setCreateResult({ ok: false, message: extractErrorMessage(e) });
+      setCreateCsopResult({ ok: false, message: extractErrorMessage(e) });
     } finally {
-      setCreating(false);
+      setCreatingCsop(false);
     }
   };
 
@@ -250,6 +312,24 @@ export default function ClaimDbConfigPage() {
       setCreateSsopResult({ ok: false, message: extractErrorMessage(e) });
     } finally {
       setCreatingSsop(false);
+    }
+  };
+
+  const handleCreateAipnTables = async () => {
+    setCreatingAipn(true);
+    setCreateAipnResult(null);
+    try {
+      const r = await createAipnTables();
+      if (r.ok) {
+        setCreateAipnResult({ ok: true, message: `สร้างตารางสำเร็จ: ${r.created.join(', ')}` });
+      } else {
+        setCreateAipnResult({ ok: false, message: r.error || 'สร้างตารางล้มเหลว' });
+      }
+      try { setAipnTablesStatus(await checkAipnTables()); } catch { /* ignore */ }
+    } catch (e) {
+      setCreateAipnResult({ ok: false, message: extractErrorMessage(e) });
+    } finally {
+      setCreatingAipn(false);
     }
   };
 
@@ -438,77 +518,44 @@ export default function ClaimDbConfigPage() {
         </div>
       )}
 
-      {/* Create tables section */}
+      {/* ============================== หัวข้อ CSOP ============================== */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-primary-700 uppercase tracking-wide">หัวข้อ CSOP</h2>
+        <p className="text-xs text-gray-400 mt-0.5">สิทธิข้าราชการผู้ป่วยนอก — กรมบัญชีกลาง</p>
+      </div>
+
+      {/* Create CSOP tables section */}
       <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
         <div className="flex items-center gap-2">
           <Hammer className="w-5 h-5 text-primary-600" />
-          <h2 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h2>
+          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
         </div>
 
         <p className="text-xs text-gray-500">
-          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">rep_head</code> (สรุปต่องวด) +{' '}
-          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">rep_detail</code> (รายละเอียดทุก case) —{' '}
+          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_rep_head</code> (สรุปต่อเลขที่ตอบรับ) +{' '}
+          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_rep_head_detail</code> (รายการเบิกทุกบรรทัด) +{' '}
+          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">csop_error</code> (รหัส error) —{' '}
           idempotent (รันซ้ำได้)
         </p>
 
-        {/* Target DB banner — ระบุชัดว่าจะสร้างที่ไหน */}
-        {serverState?.configured ? (
-          <div className="bg-primary-50 border border-primary-100 rounded-2xl px-4 py-3 flex items-start gap-2.5">
-            <Database className="w-4 h-4 text-primary-600 flex-shrink-0 mt-0.5" />
-            <div className="text-xs">
-              <p className="font-semibold text-primary-800">จะสร้างไปที่ฐานข้อมูลปลายทางนี้:</p>
-              <p className="font-mono text-primary-700 mt-0.5 break-all">
-                {serverState.dbType}://{serverState.username}@{serverState.host}:{serverState.port}/<strong>{serverState.database}</strong>
-              </p>
-              <p className="text-primary-600/70 mt-1">
-                (ค่าจาก connection ที่บันทึกไว้ในฟอร์มด้านบน — แก้ค่าแล้ว "บันทึก" ใหม่ก่อนกด)
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 text-xs text-amber-700">
-            ⚠ ยังไม่ได้บันทึก connection — กรอกฟอร์มด้านบนแล้วกด "บันทึก" ก่อน
-          </div>
-        )}
-
-        {tablesStatus && (
-          <div className="grid grid-cols-2 gap-2">
-            {(['rep_head', 'rep_detail', 'eclaim_error'] as const).map((t) => (
-              <div
-                key={t}
-                className={`flex items-center gap-2 px-3 py-2 rounded-2xl text-sm ${
-                  tablesStatus[t] ? 'bg-emerald-50' : 'bg-gray-50'
-                }`}
-              >
-                {tablesStatus[t] ? (
-                  <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                )}
-                <span className="font-mono text-xs flex-1">{t}</span>
-                <span className={`text-xs font-medium ${tablesStatus[t] ? 'text-emerald-700' : 'text-gray-500'}`}>
-                  {tablesStatus[t] ? 'มีอยู่' : 'ยังไม่มี'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <TargetDbBanner serverState={serverState} />
+        <TablesStatusGrid status={csopTablesStatus} tables={CSOP_TABLE_NAMES} />
 
         <button
-          onClick={handleCreateTables}
-          disabled={!isAdmin || creating || !serverState?.configured}
+          onClick={handleCreateCsopTables}
+          disabled={!isAdmin || creatingCsop || !serverState?.configured}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
         >
-          {creating ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
-          สร้างตาราง (rep_head + rep_detail)
+          {creatingCsop ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
+          สร้างตาราง (csop_rep_head + csop_rep_head_detail + csop_error)
         </button>
 
-        {createResult && (
+        {createCsopResult && (
           <div className={`text-xs rounded-2xl p-3 ${
-            createResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+            createCsopResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
           }`}>
-            {createResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {createResult.message}
+            {createCsopResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
+            {createCsopResult.message}
           </div>
         )}
 
@@ -519,11 +566,77 @@ export default function ClaimDbConfigPage() {
         )}
       </div>
 
-      {/* Create SSOP REP tables section */}
+      {/* Import error codes section — csop_error */}
       <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <Hammer className="w-5 h-5 text-primary-600" />
-          <h2 className="text-sm font-semibold text-gray-900">สร้างตารางเอกสารตอบกลับ สปส. (SSOP)</h2>
+          <FileSpreadsheet className="w-5 h-5 text-primary-600" />
+          <h3 className="text-sm font-semibold text-gray-900">นำเข้ารหัส Error Code (csop_error)</h3>
+        </div>
+
+        <p className="text-xs text-gray-500">
+          อัปโหลดไฟล์ .xlsx ที่มี 3 คอลัมน์: <strong>รหัส | รายละเอียด | แนวทางแก้ไข</strong> —
+          ระบบจะแทนข้อมูลเดิมทั้งหมดด้วย list ใหม่ (replace mode)
+        </p>
+
+        {errorCodesCount !== null && (
+          <div className="bg-emerald-50 rounded-2xl px-4 py-2.5 text-xs text-emerald-800">
+            <CheckCircle className="inline w-3.5 h-3.5 mr-1" />
+            ปัจจุบันมี <strong>{errorCodesCount}</strong> รหัสในตาราง csop_error
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleImportFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!isAdmin || importing || !csopTablesStatus?.csop_error}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
+          >
+            {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+            เลือกไฟล์ search_c.xlsx
+          </button>
+          {!csopTablesStatus?.csop_error && (
+            <span className="text-xs text-amber-600">ต้องสร้างตาราง csop_error ก่อน (กดปุ่ม "สร้างตาราง" ด้านบน)</span>
+          )}
+        </div>
+
+        {importResult && (
+          <div className={`text-xs rounded-2xl p-3 ${importResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+            {importResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
+            {importResult.message}
+          </div>
+        )}
+      </div>
+
+      {/* ============================== หัวข้อ CIPN ============================== */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-primary-700 uppercase tracking-wide">หัวข้อ CIPN</h2>
+        <p className="text-xs text-gray-400 mt-0.5">สิทธิข้าราชการผู้ป่วยใน — กรมบัญชีกลาง</p>
+      </div>
+      <div className="bg-white rounded-2xl shadow-soft p-6 text-center text-gray-400">
+        <p className="text-sm">ยังไม่มีตาราง — รอเชื่อมแหล่งข้อมูลในอนาคต</p>
+      </div>
+
+      {/* ============================== หัวข้อ SSOP ============================== */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-purple-700 uppercase tracking-wide">หัวข้อ SSOP</h2>
+        <p className="text-xs text-gray-400 mt-0.5">สิทธิประกันสังคมผู้ป่วยนอก</p>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Hammer className="w-5 h-5 text-purple-600" />
+          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
         </div>
 
         <p className="text-xs text-gray-500">
@@ -532,52 +645,13 @@ export default function ClaimDbConfigPage() {
           idempotent (รันซ้ำได้)
         </p>
 
-        {serverState?.configured ? (
-          <div className="bg-primary-50 border border-primary-100 rounded-2xl px-4 py-3 flex items-start gap-2.5">
-            <Database className="w-4 h-4 text-primary-600 flex-shrink-0 mt-0.5" />
-            <div className="text-xs">
-              <p className="font-semibold text-primary-800">จะสร้างไปที่ฐานข้อมูลปลายทางนี้:</p>
-              <p className="font-mono text-primary-700 mt-0.5 break-all">
-                {serverState.dbType}://{serverState.username}@{serverState.host}:{serverState.port}/<strong>{serverState.database}</strong>
-              </p>
-              <p className="text-primary-600/70 mt-1">
-                (ค่าจาก connection ที่บันทึกไว้ในฟอร์มด้านบน — แก้ค่าแล้ว "บันทึก" ใหม่ก่อนกด)
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 text-xs text-amber-700">
-            ⚠ ยังไม่ได้บันทึก connection — กรอกฟอร์มด้านบนแล้วกด "บันทึก" ก่อน
-          </div>
-        )}
-
-        {ssopTablesStatus && (
-          <div className="grid grid-cols-2 gap-2">
-            {(['ssop_rep_head', 'ssop_rep_detail'] as const).map((t) => (
-              <div
-                key={t}
-                className={`flex items-center gap-2 px-3 py-2 rounded-2xl text-sm ${
-                  ssopTablesStatus[t] ? 'bg-emerald-50' : 'bg-gray-50'
-                }`}
-              >
-                {ssopTablesStatus[t] ? (
-                  <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                )}
-                <span className="font-mono text-xs flex-1">{t}</span>
-                <span className={`text-xs font-medium ${ssopTablesStatus[t] ? 'text-emerald-700' : 'text-gray-500'}`}>
-                  {ssopTablesStatus[t] ? 'มีอยู่' : 'ยังไม่มี'}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <TargetDbBanner serverState={serverState} />
+        <TablesStatusGrid status={ssopTablesStatus} tables={SSOP_TABLE_NAMES} />
 
         <button
           onClick={handleCreateSsopRepTables}
           disabled={!isAdmin || creatingSsop || !serverState?.configured}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-500 to-purple-700 rounded-2xl hover:from-purple-600 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
         >
           {creatingSsop ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
           สร้างตาราง (ssop_rep_head + ssop_rep_detail)
@@ -599,55 +673,49 @@ export default function ClaimDbConfigPage() {
         )}
       </div>
 
-      {/* Import error codes section */}
+      {/* ============================== หัวข้อ AIPN ============================== */}
+      <div className="pt-2">
+        <h2 className="text-sm font-bold text-purple-700 uppercase tracking-wide">หัวข้อ AIPN</h2>
+        <p className="text-xs text-gray-400 mt-0.5">สิทธิประกันสังคมผู้ป่วยใน</p>
+      </div>
+
       <div className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
         <div className="flex items-center gap-2">
-          <FileSpreadsheet className="w-5 h-5 text-primary-600" />
-          <h2 className="text-sm font-semibold text-gray-900">นำเข้ารหัส Error Code (eclaim_error)</h2>
+          <Hammer className="w-5 h-5 text-purple-600" />
+          <h3 className="text-sm font-semibold text-gray-900">สร้างตารางในฐานข้อมูลปลายทาง</h3>
         </div>
 
         <p className="text-xs text-gray-500">
-          อัปโหลดไฟล์ .xlsx ที่มี 3 คอลัมน์: <strong>รหัส | รายละเอียด | แนวทางแก้ไข</strong> —
-          ระบบจะแทนข้อมูลเดิมทั้งหมดด้วย list ใหม่ (replace mode)
+          สร้าง <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">aipn_rep_head</code> (สรุปต่อเลขที่ตอบรับ) +{' '}
+          <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">aipn_rep_head_detail</code> (รายการเบิกทุกราย) —{' '}
+          idempotent (รันซ้ำได้)
         </p>
 
-        {errorCodesCount !== null && (
-          <div className="bg-emerald-50 rounded-2xl px-4 py-2.5 text-xs text-emerald-800">
-            <CheckCircle className="inline w-3.5 h-3.5 mr-1" />
-            ปัจจุบันมี <strong>{errorCodesCount}</strong> รหัสในตาราง eclaim_error
+        <TargetDbBanner serverState={serverState} />
+        <TablesStatusGrid status={aipnTablesStatus} tables={AIPN_TABLE_NAMES} />
+
+        <button
+          onClick={handleCreateAipnTables}
+          disabled={!isAdmin || creatingAipn || !serverState?.configured}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-semibold text-white bg-gradient-to-r from-purple-500 to-purple-700 rounded-2xl hover:from-purple-600 hover:to-purple-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
+        >
+          {creatingAipn ? <Loader className="w-4 h-4 animate-spin" /> : <Hammer className="w-4 h-4" />}
+          สร้างตาราง (aipn_rep_head + aipn_rep_head_detail)
+        </button>
+
+        {createAipnResult && (
+          <div className={`text-xs rounded-2xl p-3 ${
+            createAipnResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
+          }`}>
+            {createAipnResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
+            {createAipnResult.message}
           </div>
         )}
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleImportFile(f);
-              e.target.value = '';
-            }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!isAdmin || importing || !tablesStatus?.eclaim_error}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
-          >
-            {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            เลือกไฟล์ search_c.xlsx
-          </button>
-          {!tablesStatus?.eclaim_error && (
-            <span className="text-xs text-amber-600">ต้องสร้างตาราง eclaim_error ก่อน (กดปุ่ม "สร้างตาราง")</span>
-          )}
-        </div>
-
-        {importResult && (
-          <div className={`text-xs rounded-2xl p-3 ${importResult.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
-            {importResult.ok ? <CheckCircle className="inline w-3.5 h-3.5 mr-1" /> : <AlertCircle className="inline w-3.5 h-3.5 mr-1" />}
-            {importResult.message}
-          </div>
+        {!serverState?.configured && (
+          <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-2xl">
+            ⚠ ต้องบันทึก connection ก่อน ถึงจะสร้างตารางได้
+          </p>
         )}
       </div>
     </div>

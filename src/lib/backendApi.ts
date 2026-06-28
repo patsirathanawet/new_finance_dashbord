@@ -328,6 +328,26 @@ export async function checkSsopRepTables(): Promise<{ ssop_rep_head: boolean; ss
   return res.data;
 }
 
+export async function createCsopTables(): Promise<CreateTablesResult> {
+  const res = await getBackend().post<CreateTablesResult>('/claim-db-config/create-csop-tables', {});
+  return res.data;
+}
+
+export async function checkCsopTables(): Promise<{ csop_rep_head: boolean; csop_rep_head_detail: boolean; csop_error: boolean }> {
+  const res = await getBackend().get<{ csop_rep_head: boolean; csop_rep_head_detail: boolean; csop_error: boolean }>('/claim-db-config/check-csop-tables');
+  return res.data;
+}
+
+export async function createAipnTables(): Promise<CreateTablesResult> {
+  const res = await getBackend().post<CreateTablesResult>('/claim-db-config/create-aipn-tables', {});
+  return res.data;
+}
+
+export async function checkAipnTables(): Promise<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean }> {
+  const res = await getBackend().get<{ aipn_rep_head: boolean; aipn_rep_head_detail: boolean }>('/claim-db-config/check-aipn-tables');
+  return res.data;
+}
+
 export async function deleteClaimDbConfig(): Promise<void> {
   await getBackend().delete('/claim-db-config');
 }
@@ -388,6 +408,58 @@ export interface SsopRepImportResult {
 
 export async function importSsopRepToClaimDb(payload: SsopRepImportPayload): Promise<SsopRepImportResult> {
   const res = await getBackend().post<SsopRepImportResult>('/claim-db/ssop-rep-import', payload);
+  return res.data;
+}
+
+export interface CsopImportPayload {
+  ackNo: string;
+  docType?: string;
+  hospitalCode?: string;
+  batchRef?: string;
+  station?: string;
+  ackAt?: string;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+  detailRows: Record<string, unknown>[];
+}
+
+export interface CsopImportResult {
+  alreadyImported: boolean;
+  ackNo: string;
+  message?: string;
+  headInserted?: number;
+  detailInserted?: number;
+}
+
+export async function importCsopToClaimDb(payload: CsopImportPayload): Promise<CsopImportResult> {
+  const res = await getBackend().post<CsopImportResult>('/claim-db/csop-import', payload);
+  return res.data;
+}
+
+export interface AipnImportPayload {
+  ackNo: string;
+  docType?: string;
+  hospitalCode?: string;
+  batchNo?: string;
+  batchRef?: string;
+  ackAt?: string;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+  detailRows: Record<string, unknown>[];
+}
+
+export interface AipnImportResult {
+  alreadyImported: boolean;
+  ackNo: string;
+  message?: string;
+  headInserted?: number;
+  detailInserted?: number;
+}
+
+export async function importAipnToClaimDb(payload: AipnImportPayload): Promise<AipnImportResult> {
+  const res = await getBackend().post<AipnImportResult>('/claim-db/aipn-import', payload);
   return res.data;
 }
 
@@ -516,6 +588,104 @@ export async function getSsopRepSummary(params: { startDate?: string; endDate?: 
   return res.data;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Claim DB — Read queries (csop_rep_head / csop_rep_head_detail)     */
+/* ------------------------------------------------------------------ */
+
+export interface CsopRepBatch {
+  ackNo: string;
+  docType: string;
+  hospitalCode: string;
+  batchRef: string | null;
+  station: string | null;
+  ackAt: string | null;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+}
+
+export interface CsopRepBatchList {
+  items: CsopRepBatch[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CsopRepBatchDetail {
+  head: Record<string, unknown>;
+  details: Record<string, unknown>[];
+}
+
+export async function listCsopRepBatches(
+  params: { startDate?: string; endDate?: string } = {},
+  limit = 100,
+  offset = 0,
+): Promise<CsopRepBatchList> {
+  const res = await getBackend().get<CsopRepBatchList>('/claim-db/csop-rep-batches', {
+    params: { ...params, limit, offset },
+  });
+  return res.data;
+}
+
+export async function getCsopRepBatch(ackNo: string): Promise<CsopRepBatchDetail> {
+  const res = await getBackend().get<CsopRepBatchDetail>(`/claim-db/csop-rep-batches/${encodeURIComponent(ackNo)}`);
+  return res.data;
+}
+
+export async function getCsopRepSummary(params: { startDate?: string; endDate?: string } = {}): Promise<ClaimSummary> {
+  const res = await getBackend().get<ClaimSummary>('/claim-db/csop-rep-summary', { params });
+  return res.data;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Claim DB — Read queries (aipn_rep_head / aipn_rep_head_detail)     */
+/* ------------------------------------------------------------------ */
+
+export interface AipnRepBatch {
+  ackNo: string;
+  docType: string;
+  hospitalCode: string;
+  batchNo: string | null;
+  batchRef: string | null;
+  ackAt: string | null;
+  totalSubmitted: number;
+  totalPassed: number;
+  totalFailed: number;
+}
+
+export interface AipnRepBatchList {
+  items: AipnRepBatch[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AipnRepBatchDetail {
+  head: Record<string, unknown>;
+  details: Record<string, unknown>[];
+}
+
+export async function listAipnRepBatches(
+  params: { startDate?: string; endDate?: string } = {},
+  limit = 100,
+  offset = 0,
+): Promise<AipnRepBatchList> {
+  const res = await getBackend().get<AipnRepBatchList>('/claim-db/aipn-rep-batches', {
+    params: { ...params, limit, offset },
+  });
+  return res.data;
+}
+
+export async function getAipnRepBatch(ackNo: string): Promise<AipnRepBatchDetail> {
+  const res = await getBackend().get<AipnRepBatchDetail>(`/claim-db/aipn-rep-batches/${encodeURIComponent(ackNo)}`);
+  return res.data;
+}
+
+export async function getAipnRepSummary(params: { startDate?: string; endDate?: string } = {}): Promise<ClaimSummary> {
+  const res = await getBackend().get<ClaimSummary>('/claim-db/aipn-rep-summary', { params });
+  return res.data;
+}
+
 export async function getClaimMonthlyTrend(params: ClaimQueryParams = {}): Promise<{ months: MonthlyTrendRow[] }> {
   const res = await getBackend().get<{ months: MonthlyTrendRow[] }>('/claim-db/monthly-trend', { params });
   return res.data;
@@ -610,6 +780,22 @@ export async function seedEclaimErrorCodes(
 ): Promise<{ ok: boolean; upserted: number; replaced: boolean }> {
   const res = await getBackend().post<{ ok: boolean; upserted: number; replaced: boolean }>(
     '/claim-db/eclaim-error-codes/seed',
+    { rows, replace },
+  );
+  return res.data;
+}
+
+export async function listCsopErrorCodes(): Promise<{ codes: EclaimErrorCode[]; total: number }> {
+  const res = await getBackend().get<{ codes: EclaimErrorCode[]; total: number }>('/claim-db/csop-error-codes');
+  return res.data;
+}
+
+export async function seedCsopErrorCodes(
+  rows: EclaimErrorCode[],
+  replace = false,
+): Promise<{ ok: boolean; upserted: number; replaced: boolean }> {
+  const res = await getBackend().post<{ ok: boolean; upserted: number; replaced: boolean }>(
+    '/claim-db/csop-error-codes/seed',
     { rows, replace },
   );
   return res.data;

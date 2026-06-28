@@ -8,7 +8,12 @@ import {
   createPool,
   closePool,
 } from '../services/hosxpPool.js';
-import { createClaimTables, checkClaimTables, createSsopRepTables, checkSsopRepTables } from '../services/claimDbSetup.js';
+import {
+  createClaimTables, checkClaimTables,
+  createSsopRepTables, checkSsopRepTables,
+  createCsopTables, checkCsopTables,
+  createAipnTables, checkAipnTables,
+} from '../services/claimDbSetup.js';
 import { dbConfigInputSchema, dbConfigTestSchema } from '../schemas/dbConfig.js';
 
 /**
@@ -322,6 +327,178 @@ export async function claimDbConfigRoutes(app: FastifyInstance) {
     });
     try {
       return await checkSsopRepTables(pool);
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db-config/create-csop-tables — สร้าง csop_rep_head + csop_rep_head_detail + csop_error ใน target DB */
+  app.post('/claim-db-config/create-csop-tables', async (request, reply) => {
+    const auth = request.auth!;
+    if (auth.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden', message: 'ต้องเป็น admin เท่านั้น' });
+    }
+
+    const cfg = await prisma.claimDbConfig.findFirst({
+      where: { hospitalId: auth.hospitalId, deletedAt: null },
+    });
+    if (!cfg) {
+      return reply.code(404).send({
+        error: 'NotConfigured',
+        message: 'ยังไม่ตั้งค่า connection — บันทึก config ก่อน',
+      });
+    }
+
+    let password: string;
+    try {
+      password = decrypt(cfg.passwordEncrypted);
+    } catch {
+      return reply.code(500).send({ error: 'DecryptFailed', message: 'decrypt password ไม่สำเร็จ' });
+    }
+
+    const pool = createPool({
+      dbType: cfg.dbType,
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.databaseName,
+      username: cfg.username,
+      password,
+    });
+
+    try {
+      const result = await createCsopTables(pool);
+      if (!result.ok) {
+        return reply.code(500).send({
+          error: 'CreateTablesFailed',
+          message: result.error,
+          created: result.created,
+        });
+      }
+
+      audit(request, {
+        action: 'claim-db-config.create-csop-tables',
+        targetType: 'claim_db_config',
+        targetId: cfg.id,
+        metadata: { created: result.created },
+      });
+
+      return result;
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** GET /api/claim-db-config/check-csop-tables — ตรวจตารางมีอยู่ใน target DB หรือไม่ */
+  app.get('/claim-db-config/check-csop-tables', async (request, reply) => {
+    const auth = request.auth!;
+    const cfg = await prisma.claimDbConfig.findFirst({
+      where: { hospitalId: auth.hospitalId, deletedAt: null },
+    });
+    if (!cfg) return reply.code(404).send({ error: 'NotConfigured' });
+
+    let password: string;
+    try {
+      password = decrypt(cfg.passwordEncrypted);
+    } catch {
+      return reply.code(500).send({ error: 'DecryptFailed' });
+    }
+
+    const pool = createPool({
+      dbType: cfg.dbType,
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.databaseName,
+      username: cfg.username,
+      password,
+    });
+    try {
+      return await checkCsopTables(pool);
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db-config/create-aipn-tables — สร้าง aipn_rep_head + aipn_rep_head_detail ใน target DB */
+  app.post('/claim-db-config/create-aipn-tables', async (request, reply) => {
+    const auth = request.auth!;
+    if (auth.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden', message: 'ต้องเป็น admin เท่านั้น' });
+    }
+
+    const cfg = await prisma.claimDbConfig.findFirst({
+      where: { hospitalId: auth.hospitalId, deletedAt: null },
+    });
+    if (!cfg) {
+      return reply.code(404).send({
+        error: 'NotConfigured',
+        message: 'ยังไม่ตั้งค่า connection — บันทึก config ก่อน',
+      });
+    }
+
+    let password: string;
+    try {
+      password = decrypt(cfg.passwordEncrypted);
+    } catch {
+      return reply.code(500).send({ error: 'DecryptFailed', message: 'decrypt password ไม่สำเร็จ' });
+    }
+
+    const pool = createPool({
+      dbType: cfg.dbType,
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.databaseName,
+      username: cfg.username,
+      password,
+    });
+
+    try {
+      const result = await createAipnTables(pool);
+      if (!result.ok) {
+        return reply.code(500).send({
+          error: 'CreateTablesFailed',
+          message: result.error,
+          created: result.created,
+        });
+      }
+
+      audit(request, {
+        action: 'claim-db-config.create-aipn-tables',
+        targetType: 'claim_db_config',
+        targetId: cfg.id,
+        metadata: { created: result.created },
+      });
+
+      return result;
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** GET /api/claim-db-config/check-aipn-tables — ตรวจตารางมีอยู่ใน target DB หรือไม่ */
+  app.get('/claim-db-config/check-aipn-tables', async (request, reply) => {
+    const auth = request.auth!;
+    const cfg = await prisma.claimDbConfig.findFirst({
+      where: { hospitalId: auth.hospitalId, deletedAt: null },
+    });
+    if (!cfg) return reply.code(404).send({ error: 'NotConfigured' });
+
+    let password: string;
+    try {
+      password = decrypt(cfg.passwordEncrypted);
+    } catch {
+      return reply.code(500).send({ error: 'DecryptFailed' });
+    }
+
+    const pool = createPool({
+      dbType: cfg.dbType,
+      host: cfg.host,
+      port: cfg.port,
+      database: cfg.databaseName,
+      username: cfg.username,
+      password,
+    });
+    try {
+      return await checkAipnTables(pool);
     } finally {
       await closePool(pool);
     }

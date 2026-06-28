@@ -4,20 +4,49 @@ import { Upload, FileText, FileSpreadsheet, FileArchive, Trash2, Eye, AlertCircl
 import { useSessionStore } from '../store/sessionStore';
 import { useUploadStore } from '../store/uploadStore';
 import { parseREP } from '../lib/repParser';
-import { importRepToClaimDb, importSsopRepToClaimDb, extractErrorMessage } from '../lib/backendApi';
+import {
+  importRepToClaimDb, importSsopRepToClaimDb, importCsopToClaimDb, importAipnToClaimDb,
+  extractErrorMessage,
+} from '../lib/backendApi';
 import { parseSTMFile } from '../lib/stmParser';
 import { parseSsopRepZip } from '../lib/ssopRepParser';
+import { parseCsopRepZip } from '../lib/csopRepParser';
+import { parseAipnRepZip } from '../lib/aipnRepParser';
 import { formatCurrency, formatNumber } from '../lib/formatUtils';
-import type { REPRecord, STMRecord, SsopRepRecord } from '../types/upload';
+import type { REPRecord, STMRecord, SsopRepRecord, CsopRepRecord, AipnRepRecord } from '../types/upload';
 
 type ParseStatus = 'idle' | 'parsing' | 'success' | 'error';
+type ZipRecord = SsopRepRecord | CsopRepRecord | AipnRepRecord;
 
 interface FileItem {
   file: File;
   status: ParseStatus;
   error?: string;
-  record?: REPRecord | STMRecord | SsopRepRecord;
-  fileType: 'REP' | 'STM' | 'SSOP';
+  record?: REPRecord | STMRecord | ZipRecord;
+  fileType: 'REP' | 'STM' | 'SSOP' | 'CSOP' | 'AIPN';
+}
+
+/** ไฟล์ .zip ในโซน REP มีหลายรูปแบบ (SSOP/CSOP/AIPN) — ลองตามลำดับ ใครพบไฟล์ marker ของตัวเองก่อนคือ match */
+async function detectAndParseZip(
+  buf: ArrayBuffer,
+  fileName: string,
+  uploadedBy: string,
+): Promise<{ type: 'SSOP' | 'CSOP' | 'AIPN'; record: ZipRecord }> {
+  const attempts: Array<{ type: 'SSOP' | 'CSOP' | 'AIPN'; parse: () => Promise<ZipRecord> }> = [
+    { type: 'CSOP', parse: () => parseCsopRepZip(buf, fileName, uploadedBy) },
+    { type: 'SSOP', parse: () => parseSsopRepZip(buf, fileName, uploadedBy) },
+    { type: 'AIPN', parse: () => parseAipnRepZip(buf, fileName, uploadedBy) },
+  ];
+  const errors: string[] = [];
+  for (const a of attempts) {
+    try {
+      const record = await a.parse();
+      return { type: a.type, record };
+    } catch (e) {
+      errors.push(`${a.type}: ${String(e instanceof Error ? e.message : e)}`);
+    }
+  }
+  throw new Error(`ไม่รู้จักรูปแบบไฟล์ ZIP นี้ — ${errors.join(' / ')}`);
 }
 
 function formatUploadDate(iso: string) {
@@ -172,19 +201,19 @@ export default function GovUploadPage() {
       for (const item of newItems) {
         const buf = await item.file.arrayBuffer();
         try {
-          let record: REPRecord | STMRecord | SsopRepRecord;
+          let record: REPRecord | STMRecord | ZipRecord;
           let actualType: FileItem['fileType'] = item.fileType;
 
           if (fileType === 'REP' && /\.zip$/i.test(item.file.name)) {
-            // ไฟล์ .zip ในโซน REP → ตรวจรูปแบบ ตอบกลับ สปส. (SSOP, SOCDBMN/SOCDDMN .BIL)
-            record = await parseSsopRepZip(buf, item.file.name, userName ?? 'ไม่ระบุ');
-            actualType = 'SSOP';
-            const ssop = record as SsopRepRecord;
-            if (!isAdmin && hospitalCode && ssop.hospitalCode !== hospitalCode) {
+            // ไฟล์ .zip ในโซน REP → ตรวจรูปแบบอัตโนมัติ: CSOP (COCDBIL) / SSOP (SOCDBMN) / AIPN (SIGNREP)
+            const detected = await detectAndParseZip(buf, item.file.name, userName ?? 'ไม่ระบุ');
+            record = detected.record;
+            actualType = detected.type;
+            if (!isAdmin && hospitalCode && record.hospitalCode !== hospitalCode) {
               setPendingFiles((prev) =>
                 prev.map((p) =>
                   p.file === item.file
-                    ? { ...p, status: 'error', error: `รหัสโรงพยาบาลในไฟล์ (${ssop.hospitalCode}) ไม่ตรงกับที่ login (${hospitalCode})` }
+                    ? { ...p, status: 'error', error: `รหัสโรงพยาบาลในไฟล์ (${record.hospitalCode}) ไม่ตรงกับที่ login (${hospitalCode})` }
                     : p
                 )
               );
@@ -309,6 +338,92 @@ export default function GovUploadPage() {
         } catch (e) {
           messages.push(`✗ ${item.file.name}: ${extractErrorMessage(e)}`);
         }
+      } else if (item.fileType === 'CSOP') {
+        const rec = item.record as CsopRepRecord;
+        // ส่งไปที่ claim DB (csop_rep_head + csop_rep_head_detail) — ตรวจซ้ำด้วย ack_no
+        try {
+          const detailRows = rec.claimLines.map((l) => ({
+            ack_no: rec.ackNo,
+            line_no: l.lineNo,
+            status: l.status,
+            station: l.station,
+            auth_code: l.authCode,
+            dt_tran: l.dtTran,
+            inv_no: l.invNo,
+            bill_no: l.billNo,
+            hn: l.hn,
+            member_no: l.memberNo,
+            claim_amt: l.claimAmt,
+            check_codes: l.checkCodes.join(','),
+            bill_items_detail: l.billItemsDetail.length > 0 ? l.billItemsDetail : null,
+            drug_detail: l.drugDetail.length > 0 ? l.drugDetail : null,
+          }));
+          const result = await importCsopToClaimDb({
+            ackNo: rec.ackNo,
+            docType: rec.docType,
+            hospitalCode: rec.hospitalCode,
+            batchRef: rec.batchRef,
+            station: rec.station ?? '',
+            ackAt: rec.ackAt ?? '',
+            totalSubmitted: rec.totalSubmitted,
+            totalPassed: rec.totalPassed,
+            totalFailed: rec.totalFailed,
+            detailRows,
+          });
+          if (result.alreadyImported) {
+            messages.push(`⚠ ${item.file.name}: ${result.message ?? 'มีการนำเข้าแล้ว'}`);
+          } else {
+            messages.push(`✓ ${item.file.name}: นำเข้า ${result.detailInserted} รายการ (csop_rep)`);
+          }
+        } catch (e) {
+          messages.push(`✗ ${item.file.name}: ${extractErrorMessage(e)}`);
+        }
+      } else if (item.fileType === 'AIPN') {
+        const rec = item.record as AipnRepRecord;
+        // ส่งไปที่ claim DB (aipn_rep_head + aipn_rep_head_detail) — ตรวจซ้ำด้วย ack_no
+        try {
+          const detailRows = rec.claimLines.map((l) => ({
+            ack_no: rec.ackNo,
+            line_no: l.lineNo,
+            status: l.status,
+            pcode: l.pcode,
+            iptype: l.iptype,
+            care_as: l.careAs,
+            ss: l.ss,
+            hmain: l.hmain,
+            hcare: l.hcare,
+            an: l.an,
+            drg: l.drg,
+            rw: l.rw,
+            adjrw: l.adjrw,
+            service_type: l.serviceType,
+            service_subtype: l.serviceSubtype,
+            pt: l.pt,
+            amount: l.amount,
+            patient_name: l.patientName,
+            check_codes: l.checkCodes.join(','),
+            sub_detail: l.subDetail,
+          }));
+          const result = await importAipnToClaimDb({
+            ackNo: rec.ackNo,
+            docType: rec.docType,
+            hospitalCode: rec.hospitalCode,
+            batchNo: rec.batchNo ?? '',
+            batchRef: rec.batchRef ?? '',
+            ackAt: rec.ackAt ?? '',
+            totalSubmitted: rec.totalSubmitted,
+            totalPassed: rec.totalPassed,
+            totalFailed: rec.totalFailed,
+            detailRows,
+          });
+          if (result.alreadyImported) {
+            messages.push(`⚠ ${item.file.name}: ${result.message ?? 'มีการนำเข้าแล้ว'}`);
+          } else {
+            messages.push(`✓ ${item.file.name}: นำเข้า ${result.detailInserted} รายการ (aipn_rep)`);
+          }
+        } catch (e) {
+          messages.push(`✗ ${item.file.name}: ${extractErrorMessage(e)}`);
+        }
       } else {
         await saveSTM(item.record as STMRecord);
         messages.push(`✓ ${item.file.name}: บันทึก STM`);
@@ -374,7 +489,7 @@ export default function GovUploadPage() {
             </div>
             <div>
               <p className="text-sm font-semibold text-gray-800">ไฟล์ REP</p>
-              <p className="text-xs text-gray-500 mt-0.5">ผลการตรวจสอบเคลม (ตอบกลับจาก CIPN/CSMBS/NHSO) หรือไฟล์ตอบกลับ สปส. (SSOP)</p>
+              <p className="text-xs text-gray-500 mt-0.5">ผลการตรวจสอบเคลม (ตอบกลับจาก CIPN/CSMBS/NHSO) หรือไฟล์ตอบกลับ CSOP/SSOP/AIPN</p>
               <p className="text-xs text-gray-400 mt-1">ลากวาง หรือคลิกเพื่อเลือกไฟล์ .REP / .XLS / .XLSX / .ZIP</p>
             </div>
             <Upload className="w-4 h-4 text-gray-400" />
@@ -447,7 +562,8 @@ export default function GovUploadPage() {
               <div key={idx} className="px-5 py-3 flex items-center gap-3">
                 {item.fileType === 'REP' && <FileText className="w-4 h-4 text-primary-400 flex-shrink-0" />}
                 {item.fileType === 'STM' && <FileSpreadsheet className="w-4 h-4 text-green-400 flex-shrink-0" />}
-                {item.fileType === 'SSOP' && <FileArchive className="w-4 h-4 text-purple-400 flex-shrink-0" />}
+                {(item.fileType === 'SSOP' || item.fileType === 'CSOP' || item.fileType === 'AIPN') &&
+                  <FileArchive className="w-4 h-4 text-purple-400 flex-shrink-0" />}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 truncate">{item.file.name}</p>
                   {item.error && <p className="text-xs text-red-500 mt-0.5">{item.error}</p>}
@@ -457,10 +573,10 @@ export default function GovUploadPage() {
                         `รพ. ${(item.record as REPRecord).hospitalCode} — งวด ${(item.record as REPRecord).batchNo} — ${formatNumber((item.record as REPRecord).totalSubmitted)} ราย`}
                       {item.fileType === 'STM' &&
                         `รพ. ${(item.record as STMRecord).hospitalCode} — ${(item.record as STMRecord).docNo}`}
-                      {item.fileType === 'SSOP' &&
-                        `รพ. ${(item.record as SsopRepRecord).hospitalCode} — เลขที่ตอบรับ ${(item.record as SsopRepRecord).ackNo} — ` +
-                        `ส่ง ${formatNumber((item.record as SsopRepRecord).totalSubmitted)} ราย (ผ่าน ${formatNumber((item.record as SsopRepRecord).totalPassed)} / ` +
-                        `ไม่ผ่าน ${formatNumber((item.record as SsopRepRecord).totalFailed)})`}
+                      {(item.fileType === 'SSOP' || item.fileType === 'CSOP' || item.fileType === 'AIPN') &&
+                        `[${item.fileType}] รพ. ${(item.record as ZipRecord).hospitalCode} — เลขที่ตอบรับ ${(item.record as ZipRecord).ackNo} — ` +
+                        `ส่ง ${formatNumber((item.record as ZipRecord).totalSubmitted)} ราย (ผ่าน ${formatNumber((item.record as ZipRecord).totalPassed)} / ` +
+                        `ไม่ผ่าน ${formatNumber((item.record as ZipRecord).totalFailed)})`}
                     </p>
                   )}
                 </div>

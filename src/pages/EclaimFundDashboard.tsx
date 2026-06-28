@@ -13,9 +13,13 @@ import {
   getClaimSummary, listRepBatches, getRepBatch, getClaimErrorSummary, getClaimErrorDetail,
   listEclaimErrorCodes, getFailedExport,
   listSsopRepBatches, getSsopRepBatch, getSsopRepSummary,
+  listCsopRepBatches, getCsopRepBatch, getCsopRepSummary,
+  listAipnRepBatches, getAipnRepBatch, getAipnRepSummary,
   extractErrorMessage,
   type ClaimSummary, type RepBatch, type RepBatchDetail, type ErrorSummary, type ErrorDetailRow,
   type SsopRepBatch, type SsopRepBatchDetail,
+  type CsopRepBatch, type CsopRepBatchDetail,
+  type AipnRepBatch, type AipnRepBatchDetail,
 } from '../lib/backendApi';
 import { formatCurrency, formatNumber } from '../lib/formatUtils';
 import { useDateFilter } from '../hooks/useDateFilter';
@@ -388,6 +392,246 @@ function SsopDetailDrawer({ ackNo, onClose }: { ackNo: string; onClose: () => vo
   );
 }
 
+/** Detail drawer สำหรับเอกสารตอบรับ CSOP (csop_rep_head/detail) — แสดงเฉพาะหน้า CSOP */
+function CsopDetailDrawer({ ackNo, onClose }: { ackNo: string; onClose: () => void }) {
+  const { data, isLoading, error: queryError } = useQuery<CsopRepBatchDetail | null>({
+    queryKey: ['csopRepBatch', ackNo],
+    queryFn: async () => getCsopRepBatch(ackNo),
+    enabled: Boolean(ackNo),
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  const loading = isLoading;
+  const error = queryError instanceof Error ? queryError.message : null;
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-3xl shadow-soft w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="bg-gradient-to-r from-primary-500 to-primary-700 px-6 py-4 flex items-center justify-between text-white">
+          <h2 className="text-sm font-semibold">เอกสารตอบรับ CSOP เลขที่ตอบรับ: {ackNo}</h2>
+          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader className="w-6 h-6 text-primary-600 animate-spin" />
+            </div>
+          )}
+          {error && <div className="text-red-700 bg-red-50 p-3 rounded-2xl text-sm">{error}</div>}
+          {data && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                <div className="bg-gray-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ส่งทั้งหมด</p>
+                  <p className="text-lg font-bold text-gray-900">{formatNumber(Number(data.head.total_submitted))}</p>
+                </div>
+                <div className="bg-green-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ผ่าน</p>
+                  <p className="text-lg font-bold text-green-700">{formatNumber(Number(data.head.total_passed))}</p>
+                </div>
+                <div className="bg-red-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ไม่ผ่าน</p>
+                  <p className="text-lg font-bold text-red-700">{formatNumber(Number(data.head.total_failed))}</p>
+                </div>
+                <div className="bg-primary-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">สถานี</p>
+                  <p className="text-sm font-bold text-primary-700">{String(data.head.station ?? '-')}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-2xl border border-gray-100">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">#</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">สถานะ</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">Inv No.</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">HN</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">วันที่ทำรายการ</th>
+                      <th className="px-2 py-2 text-right font-semibold text-gray-600">ยอดเบิก</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">CheckCode</th>
+                      <th className="px-2 py-2 text-center font-semibold text-gray-600">รายละเอียด</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {data.details.map((d, i) => {
+                      const passed = String(d.status) === 'passed';
+                      const billItemsDetail = d.bill_items_detail as unknown[] | null;
+                      const drugDetail = d.drug_detail as unknown[] | null;
+                      const hasDetail = (Array.isArray(billItemsDetail) && billItemsDetail.length > 0)
+                        || (Array.isArray(drugDetail) && drugDetail.length > 0);
+                      return (
+                        <Fragment key={i}>
+                          <tr className={passed ? '' : 'bg-red-50/30'}>
+                            <td className="px-2 py-1.5 text-gray-500">{String(d.line_no)}</td>
+                            <td className={`px-2 py-1.5 font-semibold ${passed ? 'text-green-700' : 'text-red-700'}`}>
+                              {passed ? 'ผ่าน' : 'ไม่ผ่าน'}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono">{String(d.inv_no ?? '-')}</td>
+                            <td className="px-2 py-1.5 font-mono">{String(d.hn ?? '-')}</td>
+                            <td className="px-2 py-1.5 text-gray-500">{String(d.dt_tran ?? '-')}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">{formatCurrency(Number(d.claim_amt ?? 0))}</td>
+                            <td className="px-2 py-1.5 text-xs text-red-700 font-semibold">{String(d.check_codes ?? '-') || '-'}</td>
+                            <td className="px-2 py-1.5 text-center">
+                              {hasDetail && (
+                                <button
+                                  onClick={() => setExpandedRow(expandedRow === i ? null : i)}
+                                  className="text-primary-600 hover:underline"
+                                >
+                                  {expandedRow === i ? 'ซ่อน' : 'ดู'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {expandedRow === i && hasDetail && (
+                            <tr className="bg-primary-50/30">
+                              <td colSpan={8} className="px-3 py-2">
+                                <pre className="text-[11px] whitespace-pre-wrap text-gray-700 bg-white rounded-xl p-3 border border-primary-100 overflow-x-auto">
+                                  {JSON.stringify({ billItemsDetail, drugDetail }, null, 2)}
+                                </pre>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-400 mt-3 text-center">{data.details.length} รายการ</p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Detail drawer สำหรับเอกสารตอบรับ AIPN (aipn_rep_head/detail) — แสดงเฉพาะหน้า AIPN */
+function AipnDetailDrawer({ ackNo, onClose }: { ackNo: string; onClose: () => void }) {
+  const { data, isLoading, error: queryError } = useQuery<AipnRepBatchDetail | null>({
+    queryKey: ['aipnRepBatch', ackNo],
+    queryFn: async () => getAipnRepBatch(ackNo),
+    enabled: Boolean(ackNo),
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  const loading = isLoading;
+  const error = queryError instanceof Error ? queryError.message : null;
+  const [expandedRow, setExpandedRow] = useState<number | null>(null);
+
+  return (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-3xl shadow-soft w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="bg-gradient-to-r from-purple-500 to-purple-700 px-6 py-4 flex items-center justify-between text-white">
+          <h2 className="text-sm font-semibold">เอกสารตอบรับ AIPN เลขที่ตอบรับ: {ackNo}</h2>
+          <button onClick={onClose} className="p-1 hover:bg-white/20 rounded-lg"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader className="w-6 h-6 text-purple-600 animate-spin" />
+            </div>
+          )}
+          {error && <div className="text-red-700 bg-red-50 p-3 rounded-2xl text-sm">{error}</div>}
+          {data && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                <div className="bg-gray-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ส่งทั้งหมด</p>
+                  <p className="text-lg font-bold text-gray-900">{formatNumber(Number(data.head.total_submitted))}</p>
+                </div>
+                <div className="bg-green-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ผ่าน</p>
+                  <p className="text-lg font-bold text-green-700">{formatNumber(Number(data.head.total_passed))}</p>
+                </div>
+                <div className="bg-red-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">ไม่ผ่าน</p>
+                  <p className="text-lg font-bold text-red-700">{formatNumber(Number(data.head.total_failed))}</p>
+                </div>
+                <div className="bg-purple-50 rounded-2xl p-3 text-center">
+                  <p className="text-xs text-gray-500">งวดที่ส่ง</p>
+                  <p className="text-sm font-bold text-purple-700">{String(data.head.batch_no ?? '-')}</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-2xl border border-gray-100">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">#</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">สถานะ</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">AN</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">ชื่อ-สกุล</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">DRG</th>
+                      <th className="px-2 py-2 text-right font-semibold text-gray-600">ยอดจ่าย</th>
+                      <th className="px-2 py-2 text-left font-semibold text-gray-600">CheckCode</th>
+                      <th className="px-2 py-2 text-center font-semibold text-gray-600">รายละเอียด</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {data.details.map((d, i) => {
+                      const passed = String(d.status) === 'passed';
+                      const subDetail = d.sub_detail as unknown;
+                      const hasDetail = subDetail != null;
+                      return (
+                        <Fragment key={i}>
+                          <tr className={passed ? '' : 'bg-red-50/30'}>
+                            <td className="px-2 py-1.5 text-gray-500">{String(d.line_no)}</td>
+                            <td className={`px-2 py-1.5 font-semibold ${passed ? 'text-green-700' : 'text-red-700'}`}>
+                              {passed ? 'ผ่าน' : 'ไม่ผ่าน'}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono">{String(d.an ?? '-')}</td>
+                            <td className="px-2 py-1.5">{String(d.patient_name ?? '-')}</td>
+                            <td className="px-2 py-1.5 font-mono">{String(d.drg ?? '-')}</td>
+                            <td className="px-2 py-1.5 text-right font-mono">{formatCurrency(Number(d.amount ?? 0))}</td>
+                            <td className="px-2 py-1.5 text-xs text-red-700 font-semibold">{String(d.check_codes ?? '-') || '-'}</td>
+                            <td className="px-2 py-1.5 text-center">
+                              {hasDetail && (
+                                <button
+                                  onClick={() => setExpandedRow(expandedRow === i ? null : i)}
+                                  className="text-purple-600 hover:underline"
+                                >
+                                  {expandedRow === i ? 'ซ่อน' : 'ดู'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {expandedRow === i && hasDetail && (
+                            <tr className="bg-purple-50/30">
+                              <td colSpan={8} className="px-3 py-2">
+                                <pre className="text-[11px] whitespace-pre-wrap text-gray-700 bg-white rounded-xl p-3 border border-purple-100 overflow-x-auto">
+                                  {JSON.stringify(subDetail, null, 2)}
+                                </pre>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-400 mt-3 text-center">{data.details.length} รายการ</p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Route wrapper — resolve fund จาก URL param ก่อนเข้า dashboard */
 export default function EclaimFundDashboardRoute() {
   const { fundSlug } = useParams<{ fundSlug: string }>();
@@ -399,8 +643,15 @@ export default function EclaimFundDashboardRoute() {
 function Dashboard({ fund }: { fund: FundMeta }) {
   const FundIcon = fund.icon;
   const isSsopFund = fund.code === 'SSOP';
+  const isCsopFund = fund.code === 'CSOP';
+  const isAipnFund = fund.code === 'AIPN';
+  const isCipnFund = fund.code === 'CIPN';
+  // กองทุนที่มีตารางของตัวเอง (ไม่ใช้ rep_head เดิม) — CSOP/AIPN แทนที่ของเดิมทั้งหมด, CIPN ยังไม่มีตาราง
+  const usesOwnTable = isCsopFund || isAipnFund || isCipnFund;
   const [selectedRepNo, setSelectedRepNo] = useState<string | null>(null);
   const [selectedAckNo, setSelectedAckNo] = useState<string | null>(null);
+  const [selectedCsopAckNo, setSelectedCsopAckNo] = useState<string | null>(null);
+  const [selectedAipnAckNo, setSelectedAipnAckNo] = useState<string | null>(null);
 
   // Expandable error rows — code → loaded rows (cache); null = loading
   const [expandedCode, setExpandedCode] = useState<string | null>(null);
@@ -440,7 +691,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
       ]);
       return { summary: s, batches: l.items, errorSummary: e };
     },
-    enabled: Boolean(startDateSQL && endDateSQL),
+    enabled: Boolean(startDateSQL && endDateSQL) && !usesOwnTable,
     retry: false,
   });
 
@@ -469,8 +720,50 @@ function Dashboard({ fund }: { fund: FundMeta }) {
     enabled: isSsopFund && Boolean(startDateSQL && endDateSQL),
     retry: false,
   });
-  // หน้า SSS: รวมยอด ssop_rep เข้ากับยอด rep_head เดิมที่ KPI การ์ดบนสุดเลย ไม่แยกแถวใหม่
+  // เอกสารตอบรับ CSOP (csop_rep_head) — แทนที่ rep_head เดิมทั้งหมด (ไม่ merge)
+  const { data: csopBatches, isLoading: csopLoading, error: csopQueryError } = useQuery<CsopRepBatch[]>({
+    queryKey: ['csopRepBatches', startDateSQL, endDateSQL],
+    queryFn: async () => {
+      const r = await listCsopRepBatches({ startDate: startDateSQL, endDate: endDateSQL }, 200, 0);
+      return r.items;
+    },
+    enabled: isCsopFund && Boolean(startDateSQL && endDateSQL),
+    retry: false,
+  });
+  const csopError = csopQueryError instanceof Error ? csopQueryError.message : null;
+
+  const { data: csopSummary } = useQuery<ClaimSummary>({
+    queryKey: ['csopRepSummary', startDateSQL, endDateSQL],
+    queryFn: async () => getCsopRepSummary({ startDate: startDateSQL, endDate: endDateSQL }),
+    enabled: isCsopFund && Boolean(startDateSQL && endDateSQL),
+    retry: false,
+  });
+
+  // เอกสารตอบรับ AIPN (aipn_rep_head)
+  const { data: aipnBatches, isLoading: aipnLoading, error: aipnQueryError } = useQuery<AipnRepBatch[]>({
+    queryKey: ['aipnRepBatches', startDateSQL, endDateSQL],
+    queryFn: async () => {
+      const r = await listAipnRepBatches({ startDate: startDateSQL, endDate: endDateSQL }, 200, 0);
+      return r.items;
+    },
+    enabled: isAipnFund && Boolean(startDateSQL && endDateSQL),
+    retry: false,
+  });
+  const aipnError = aipnQueryError instanceof Error ? aipnQueryError.message : null;
+
+  const { data: aipnSummary } = useQuery<ClaimSummary>({
+    queryKey: ['aipnRepSummary', startDateSQL, endDateSQL],
+    queryFn: async () => getAipnRepSummary({ startDate: startDateSQL, endDate: endDateSQL }),
+    enabled: isAipnFund && Boolean(startDateSQL && endDateSQL),
+    retry: false,
+  });
+
+  // หน้า SSOP: รวมยอด ssop_rep เข้ากับยอด rep_head เดิมที่ KPI การ์ดบนสุดเลย (ของเดิม ไม่เปลี่ยน)
+  // หน้า CSOP/AIPN: ใช้ยอดจากตารางของตัวเองล้วนๆ (แทนที่ rep_head เดิม) — CIPN ยังไม่มีข้อมูล
   const displaySummary = useMemo<ClaimSummary | null>(() => {
+    if (isCsopFund) return csopSummary ?? null;
+    if (isAipnFund) return aipnSummary ?? null;
+    if (isCipnFund) return null;
     if (!isSsopFund) return summary;
     if (!summary && !ssopSummary) return null;
     const s = summary ?? { batches: 0, submitted: 0, passed: 0, failed: 0, passedAmount: 0, failedAmount: 0, totalAmount: 0 };
@@ -484,7 +777,7 @@ function Dashboard({ fund }: { fund: FundMeta }) {
       failedAmount: s.failedAmount + o.failedAmount,
       totalAmount: s.totalAmount + o.totalAmount,
     };
-  }, [isSsopFund, summary, ssopSummary]);
+  }, [isSsopFund, isCsopFund, isAipnFund, isCipnFund, summary, ssopSummary, csopSummary, aipnSummary]);
 
   const toggleErrorRow = async (code: string) => {
     // ถ้ากด code เดิม → ย่อ
@@ -639,7 +932,8 @@ function Dashboard({ fund }: { fund: FundMeta }) {
       {trend.length > 0 && ( ... )}
       */}
 
-      {/* Batches table */}
+      {/* Batches table (rep_head) — ไม่แสดงสำหรับ CSOP/AIPN/CIPN ที่มีตารางของตัวเอง */}
+      {!usesOwnTable && (
       <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-sm font-semibold text-gray-700">รายการงวด (rep_head)</h3>
@@ -687,6 +981,130 @@ function Dashboard({ fund }: { fund: FundMeta }) {
           </table>
         </div>
       </div>
+      )}
+
+      {/* CSOP batches table (csop_rep_head) — แทนที่ rep_head เดิม */}
+      {isCsopFund && (
+      <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">เอกสารตอบรับ CSOP (csop_rep_head)</h3>
+          <p className="text-xs text-gray-400">{csopBatches?.length ?? 0} เอกสาร</p>
+        </div>
+        {csopLoading && (
+          <div className="flex items-center justify-center py-8">
+            <Loader className="w-5 h-5 text-primary-600 animate-spin" />
+          </div>
+        )}
+        {csopError && <div className="text-red-700 bg-red-50 p-4 text-sm">{csopError}</div>}
+        {!csopLoading && !csopError && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">เลขที่ตอบรับ</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">รหัส รพ.</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">งวดส่งของ รพ.</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">วันที่ออกเลขตอบรับ</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ส่งทั้งหมด</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ผ่าน</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ไม่ผ่าน</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(!csopBatches || csopBatches.length === 0) && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-gray-400">
+                      ยังไม่มีข้อมูล — นำเข้าไฟล์ตอบกลับ CSOP (.zip) ที่หน้า "เอกสารเคลม REP/STM"
+                    </td>
+                  </tr>
+                )}
+                {csopBatches?.map((b) => (
+                  <tr
+                    key={b.ackNo}
+                    onClick={() => setSelectedCsopAckNo(b.ackNo)}
+                    className="hover:bg-primary-50 cursor-pointer transition-colors"
+                  >
+                    <td className="px-3 py-2 font-mono font-semibold text-primary-700">{b.ackNo}</td>
+                    <td className="px-3 py-2 text-gray-600 font-mono">{b.hospitalCode}</td>
+                    <td className="px-3 py-2 text-gray-600 truncate max-w-[260px]" title={b.batchRef ?? ''}>{b.batchRef ?? '-'}</td>
+                    <td className="px-3 py-2 text-gray-500">{b.ackAt ?? '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono">{formatNumber(b.totalSubmitted)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-green-700">{formatNumber(b.totalPassed)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-700">{formatNumber(b.totalFailed)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* AIPN batches table (aipn_rep_head) */}
+      {isAipnFund && (
+      <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-700">เอกสารตอบรับ AIPN (aipn_rep_head)</h3>
+          <p className="text-xs text-gray-400">{aipnBatches?.length ?? 0} เอกสาร</p>
+        </div>
+        {aipnLoading && (
+          <div className="flex items-center justify-center py-8">
+            <Loader className="w-5 h-5 text-purple-600 animate-spin" />
+          </div>
+        )}
+        {aipnError && <div className="text-red-700 bg-red-50 p-4 text-sm">{aipnError}</div>}
+        {!aipnLoading && !aipnError && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">เลขที่ตอบรับ</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">รหัส รพ.</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">งวดที่ส่ง</th>
+                  <th className="px-3 py-2.5 text-left font-semibold text-gray-600 uppercase">วันที่ออกเลขตอบรับ</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ส่งทั้งหมด</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ผ่าน</th>
+                  <th className="px-3 py-2.5 text-right font-semibold text-gray-600 uppercase">ไม่ผ่าน</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {(!aipnBatches || aipnBatches.length === 0) && (
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-gray-400">
+                      ยังไม่มีข้อมูล — นำเข้าไฟล์ตอบกลับ AIPN (.zip) ที่หน้า "เอกสารเคลม REP/STM"
+                    </td>
+                  </tr>
+                )}
+                {aipnBatches?.map((b) => (
+                  <tr
+                    key={b.ackNo}
+                    onClick={() => setSelectedAipnAckNo(b.ackNo)}
+                    className="hover:bg-purple-50 cursor-pointer transition-colors"
+                  >
+                    <td className="px-3 py-2 font-mono font-semibold text-purple-700">{b.ackNo}</td>
+                    <td className="px-3 py-2 text-gray-600 font-mono">{b.hospitalCode}</td>
+                    <td className="px-3 py-2 text-gray-600">{b.batchNo ?? '-'} {b.batchRef ? `(${b.batchRef})` : ''}</td>
+                    <td className="px-3 py-2 text-gray-500">{b.ackAt ?? '-'}</td>
+                    <td className="px-3 py-2 text-right font-mono">{formatNumber(b.totalSubmitted)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-green-700">{formatNumber(b.totalPassed)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-red-700">{formatNumber(b.totalFailed)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* CIPN — ยังไม่มีตาราง/แหล่งข้อมูล รอเชื่อมในอนาคต */}
+      {isCipnFund && (
+        <div className="bg-white rounded-2xl shadow-soft p-10 text-center text-gray-400">
+          <FileBarChart className="w-10 h-10 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">ยังไม่มีข้อมูล</p>
+          <p className="text-xs mt-1">หน้าสิทธิข้าราชการผู้ป่วยใน [CIPN] รอเชื่อมแหล่งข้อมูลในอนาคต</p>
+        </div>
+      )}
 
       {/* SSOP REP batches (ssop_rep_head) — เฉพาะหน้า SSS เท่านั้น ต่อจากตาราง rep_head เดิม
           (ยอดรวมเข้ากับ KPI การ์ดบนสุดแล้วผ่าน displaySummary — ตรงนี้แสดงแค่ตารางรายเอกสาร) */}
@@ -907,6 +1325,8 @@ function Dashboard({ fund }: { fund: FundMeta }) {
 
       {selectedRepNo && <DetailDrawer repNo={selectedRepNo} onClose={() => setSelectedRepNo(null)} />}
       {selectedAckNo && <SsopDetailDrawer ackNo={selectedAckNo} onClose={() => setSelectedAckNo(null)} />}
+      {selectedCsopAckNo && <CsopDetailDrawer ackNo={selectedCsopAckNo} onClose={() => setSelectedCsopAckNo(null)} />}
+      {selectedAipnAckNo && <AipnDetailDrawer ackNo={selectedAipnAckNo} onClose={() => setSelectedAipnAckNo(null)} />}
     </div>
   );
 }

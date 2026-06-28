@@ -420,6 +420,258 @@ export async function claimQueryRoutes(app: FastifyInstance) {
     }
   });
 
+  /** GET /api/claim-db/csop-rep-summary?startDate=&endDate=
+   *  สรุปยอด csop — ยอดเงิน (claim_amt) เก็บที่ระดับ csop_rep_head_detail
+   */
+  app.get<{ Querystring: { startDate?: string; endDate?: string } }>(
+    '/claim-db/csop-rep-summary',
+    async (request, reply) => {
+      const auth = request.auth!;
+      const { startDate, endDate } = request.query;
+
+      let pool: CachedPool;
+      try { pool = await openClaimPool(auth.hospitalId); }
+      catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+      try {
+        const dateF = ssopDateRangeClause(startDate, endDate, 'h.ack_at');
+        const sql = `
+          SELECT
+            COUNT(DISTINCT d.ack_no) AS batches,
+            COUNT(*) AS submitted,
+            SUM(CASE WHEN d.status = 'passed' THEN 1 ELSE 0 END) AS passed,
+            SUM(CASE WHEN d.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            COALESCE(SUM(CASE WHEN d.status = 'passed' THEN COALESCE(d.claim_amt,0) ELSE 0 END), 0) AS passed_amount,
+            COALESCE(SUM(CASE WHEN d.status = 'failed' THEN COALESCE(d.claim_amt,0) ELSE 0 END), 0) AS failed_amount
+          FROM csop_rep_head_detail d
+          JOIN csop_rep_head h ON h.ack_no = d.ack_no
+          WHERE 1=1 ${dateF}
+        `;
+        const r = await runQuery(pool, sql);
+        const row = r.rows[0] ?? {};
+        const passedAmount = Number(row.passed_amount ?? 0);
+        const failedAmount = Number(row.failed_amount ?? 0);
+        return {
+          batches: Number(row.batches ?? 0),
+          submitted: Number(row.submitted ?? 0),
+          passed: Number(row.passed ?? 0),
+          failed: Number(row.failed ?? 0),
+          passedAmount,
+          failedAmount,
+          totalAmount: passedAmount + failedAmount,
+        };
+      } catch (err) {
+        return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await closePool(pool);
+      }
+    },
+  );
+
+  /** GET /api/claim-db/csop-rep-batches?startDate=&endDate=&limit=&offset= — รายการงวด csop_rep_head */
+  app.get<{ Querystring: { startDate?: string; endDate?: string; limit?: string; offset?: string } }>(
+    '/claim-db/csop-rep-batches',
+    async (request, reply) => {
+      const auth = request.auth!;
+      const { startDate, endDate } = request.query;
+      const limit = Math.min(Number(request.query.limit ?? 100), 500);
+      const offset = Math.max(Number(request.query.offset ?? 0), 0);
+
+      let pool: CachedPool;
+      try { pool = await openClaimPool(auth.hospitalId); }
+      catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+      try {
+        const dateF = ssopDateRangeClause(startDate, endDate);
+        const sql = `
+          SELECT ack_no, doc_type, hospital_code, batch_ref, station, ack_at,
+                 total_submitted, total_passed, total_failed, created_at
+          FROM csop_rep_head
+          WHERE 1=1 ${dateF}
+          ORDER BY ack_no DESC
+          LIMIT ${limit} OFFSET ${offset}
+        `;
+        const countSql = `SELECT COUNT(*) AS cnt FROM csop_rep_head WHERE 1=1 ${dateF}`;
+        const [list, count] = await Promise.all([runQuery(pool, sql), runQuery(pool, countSql)]);
+        return {
+          items: list.rows.map((r) => ({
+            ackNo: String(r.ack_no ?? ''),
+            docType: String(r.doc_type ?? ''),
+            hospitalCode: String(r.hospital_code ?? ''),
+            batchRef: r.batch_ref ? String(r.batch_ref) : null,
+            station: r.station ? String(r.station) : null,
+            ackAt: r.ack_at ? String(r.ack_at) : null,
+            totalSubmitted: Number(r.total_submitted ?? 0),
+            totalPassed: Number(r.total_passed ?? 0),
+            totalFailed: Number(r.total_failed ?? 0),
+          })),
+          total: Number(count.rows[0]?.cnt ?? 0),
+          limit,
+          offset,
+        };
+      } catch (err) {
+        return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await closePool(pool);
+      }
+    },
+  );
+
+  /** GET /api/claim-db/csop-rep-batches/:ackNo — head + claim lines (csop_rep_head_detail) */
+  app.get<{ Params: { ackNo: string } }>('/claim-db/csop-rep-batches/:ackNo', async (request, reply) => {
+    const auth = request.auth!;
+    const ackNo = escapeId(request.params.ackNo);
+    if (!ackNo) return reply.code(400).send({ error: 'BadRequest', message: 'invalid ackNo' });
+
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      const headR = await runQuery(pool, `SELECT * FROM csop_rep_head WHERE ack_no = '${ackNo}' LIMIT 1`);
+      if (headR.rows.length === 0) return reply.code(404).send({ error: 'NotFound' });
+
+      const detailR = await runQuery(
+        pool,
+        `SELECT * FROM csop_rep_head_detail WHERE ack_no = '${ackNo}' ORDER BY line_no ASC`,
+      );
+      return {
+        head: headR.rows[0],
+        details: detailR.rows,
+      };
+    } catch (err) {
+      return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** GET /api/claim-db/aipn-rep-summary?startDate=&endDate=
+   *  สรุปยอด aipn — ยอดเงิน (amount) เก็บที่ระดับ aipn_rep_head_detail
+   */
+  app.get<{ Querystring: { startDate?: string; endDate?: string } }>(
+    '/claim-db/aipn-rep-summary',
+    async (request, reply) => {
+      const auth = request.auth!;
+      const { startDate, endDate } = request.query;
+
+      let pool: CachedPool;
+      try { pool = await openClaimPool(auth.hospitalId); }
+      catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+      try {
+        const dateF = ssopDateRangeClause(startDate, endDate, 'h.ack_at');
+        const sql = `
+          SELECT
+            COUNT(DISTINCT d.ack_no) AS batches,
+            COUNT(*) AS submitted,
+            SUM(CASE WHEN d.status = 'passed' THEN 1 ELSE 0 END) AS passed,
+            SUM(CASE WHEN d.status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            COALESCE(SUM(CASE WHEN d.status = 'passed' THEN COALESCE(d.amount,0) ELSE 0 END), 0) AS passed_amount,
+            COALESCE(SUM(CASE WHEN d.status = 'failed' THEN COALESCE(d.amount,0) ELSE 0 END), 0) AS failed_amount
+          FROM aipn_rep_head_detail d
+          JOIN aipn_rep_head h ON h.ack_no = d.ack_no
+          WHERE 1=1 ${dateF}
+        `;
+        const r = await runQuery(pool, sql);
+        const row = r.rows[0] ?? {};
+        const passedAmount = Number(row.passed_amount ?? 0);
+        const failedAmount = Number(row.failed_amount ?? 0);
+        return {
+          batches: Number(row.batches ?? 0),
+          submitted: Number(row.submitted ?? 0),
+          passed: Number(row.passed ?? 0),
+          failed: Number(row.failed ?? 0),
+          passedAmount,
+          failedAmount,
+          totalAmount: passedAmount + failedAmount,
+        };
+      } catch (err) {
+        return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await closePool(pool);
+      }
+    },
+  );
+
+  /** GET /api/claim-db/aipn-rep-batches?startDate=&endDate=&limit=&offset= — รายการงวด aipn_rep_head */
+  app.get<{ Querystring: { startDate?: string; endDate?: string; limit?: string; offset?: string } }>(
+    '/claim-db/aipn-rep-batches',
+    async (request, reply) => {
+      const auth = request.auth!;
+      const { startDate, endDate } = request.query;
+      const limit = Math.min(Number(request.query.limit ?? 100), 500);
+      const offset = Math.max(Number(request.query.offset ?? 0), 0);
+
+      let pool: CachedPool;
+      try { pool = await openClaimPool(auth.hospitalId); }
+      catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+      try {
+        const dateF = ssopDateRangeClause(startDate, endDate);
+        const sql = `
+          SELECT ack_no, doc_type, hospital_code, batch_no, batch_ref, ack_at,
+                 total_submitted, total_passed, total_failed, created_at
+          FROM aipn_rep_head
+          WHERE 1=1 ${dateF}
+          ORDER BY ack_no DESC
+          LIMIT ${limit} OFFSET ${offset}
+        `;
+        const countSql = `SELECT COUNT(*) AS cnt FROM aipn_rep_head WHERE 1=1 ${dateF}`;
+        const [list, count] = await Promise.all([runQuery(pool, sql), runQuery(pool, countSql)]);
+        return {
+          items: list.rows.map((r) => ({
+            ackNo: String(r.ack_no ?? ''),
+            docType: String(r.doc_type ?? ''),
+            hospitalCode: String(r.hospital_code ?? ''),
+            batchNo: r.batch_no ? String(r.batch_no) : null,
+            batchRef: r.batch_ref ? String(r.batch_ref) : null,
+            ackAt: r.ack_at ? String(r.ack_at) : null,
+            totalSubmitted: Number(r.total_submitted ?? 0),
+            totalPassed: Number(r.total_passed ?? 0),
+            totalFailed: Number(r.total_failed ?? 0),
+          })),
+          total: Number(count.rows[0]?.cnt ?? 0),
+          limit,
+          offset,
+        };
+      } catch (err) {
+        return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+      } finally {
+        await closePool(pool);
+      }
+    },
+  );
+
+  /** GET /api/claim-db/aipn-rep-batches/:ackNo — head + claim lines (aipn_rep_head_detail) */
+  app.get<{ Params: { ackNo: string } }>('/claim-db/aipn-rep-batches/:ackNo', async (request, reply) => {
+    const auth = request.auth!;
+    const ackNo = escapeId(request.params.ackNo);
+    if (!ackNo) return reply.code(400).send({ error: 'BadRequest', message: 'invalid ackNo' });
+
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      const headR = await runQuery(pool, `SELECT * FROM aipn_rep_head WHERE ack_no = '${ackNo}' LIMIT 1`);
+      if (headR.rows.length === 0) return reply.code(404).send({ error: 'NotFound' });
+
+      const detailR = await runQuery(
+        pool,
+        `SELECT * FROM aipn_rep_head_detail WHERE ack_no = '${ackNo}' ORDER BY line_no ASC`,
+      );
+      return {
+        head: headR.rows[0],
+        details: detailR.rows,
+      };
+    } catch (err) {
+      return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
   /** GET /api/claim-db/failed-export?fundCode=&startDate=&endDate=
    *   ดึงทุก rep_detail row ที่ติด C (error_code != ''/'-') พร้อม description จาก eclaim_error
    *   สำหรับ frontend นำไป export Excel
@@ -793,6 +1045,75 @@ export async function claimQueryRoutes(app: FastifyInstance) {
           ? `INSERT INTO eclaim_error (code, description, resolution) VALUES ${values} ` +
             `ON CONFLICT (code) DO UPDATE SET description = EXCLUDED.description, resolution = EXCLUDED.resolution, updated_at = NOW()`
           : `INSERT INTO eclaim_error (code, description, resolution) VALUES ${values} ` +
+            `ON DUPLICATE KEY UPDATE description = VALUES(description), resolution = VALUES(resolution), updated_at = CURRENT_TIMESTAMP`;
+        await runQuery(pool, sql);
+        upserted += chunk.length;
+      }
+      return { ok: true, upserted, replaced: replace };
+    } catch (err) {
+      return reply.code(500).send({ error: 'SeedFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** GET /api/claim-db/csop-error-codes — list ทั้งหมด (เหมือน eclaim-error-codes แต่ใช้ตาราง csop_error) */
+  app.get('/claim-db/csop-error-codes', async (request, reply) => {
+    const auth = request.auth!;
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      const r = await runQuery(pool, `SELECT code, description, resolution FROM csop_error ORDER BY code`);
+      return {
+        codes: r.rows.map((row) => ({
+          code: String(row.code ?? ''),
+          description: row.description != null ? String(row.description) : null,
+          resolution: row.resolution != null ? String(row.resolution) : null,
+        })),
+        total: r.rows.length,
+      };
+    } catch (err) {
+      return reply.code(500).send({ error: 'QueryFailed', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      await closePool(pool);
+    }
+  });
+
+  /** POST /api/claim-db/csop-error-codes/seed — bulk upsert (เหมือน eclaim-error-codes/seed แต่ใช้ตาราง csop_error) */
+  app.post('/claim-db/csop-error-codes/seed', async (request, reply) => {
+    const auth = request.auth!;
+    if (auth.role !== 'admin') {
+      return reply.code(403).send({ error: 'Forbidden', message: 'admin เท่านั้น' });
+    }
+    const parsed = eclaimErrorSeedSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
+    }
+    const { rows, replace } = parsed.data;
+
+    let pool: CachedPool;
+    try { pool = await openClaimPool(auth.hospitalId); }
+    catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
+
+    try {
+      if (replace) {
+        await runQuery(pool, 'DELETE FROM csop_error');
+      }
+
+      const chunkSize = 200;
+      let upserted = 0;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        const values = chunk
+          .map((r) => `(${sqlValueOrNull(r.code)}, ${sqlValueOrNull(r.description)}, ${sqlValueOrNull(r.resolution)})`)
+          .join(', ');
+
+        const sql = pool.type === 'postgresql'
+          ? `INSERT INTO csop_error (code, description, resolution) VALUES ${values} ` +
+            `ON CONFLICT (code) DO UPDATE SET description = EXCLUDED.description, resolution = EXCLUDED.resolution, updated_at = NOW()`
+          : `INSERT INTO csop_error (code, description, resolution) VALUES ${values} ` +
             `ON DUPLICATE KEY UPDATE description = VALUES(description), resolution = VALUES(resolution), updated_at = CURRENT_TIMESTAMP`;
         await runQuery(pool, sql);
         upserted += chunk.length;
