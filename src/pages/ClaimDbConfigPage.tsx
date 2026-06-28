@@ -207,9 +207,17 @@ export default function ClaimDbConfigPage() {
         return;
       }
 
-      const result = await seedCsopErrorCodes(dataRows, true);
-      setImportResult({ ok: true, message: `import ${result.upserted} รหัสสำเร็จ` });
-      setErrorCodesCount(result.upserted);
+      const result = await seedCsopErrorCodes(dataRows);
+      setImportResult({
+        ok: true,
+        message: result.skipped > 0
+          ? `นำเข้าใหม่ ${result.inserted} รหัสสำเร็จ (ข้าม ${result.skipped} รหัสที่มีอยู่แล้ว)`
+          : `นำเข้าใหม่ ${result.inserted} รหัสสำเร็จ`,
+      });
+      try {
+        const list = await listCsopErrorCodes();
+        setErrorCodesCount(list.total);
+      } catch { /* ignore */ }
     } catch (e) {
       setImportResult({ ok: false, message: extractErrorMessage(e) });
     } finally {
@@ -565,8 +573,8 @@ export default function ClaimDbConfigPage() {
         </div>
 
         <p className="text-xs text-gray-500">
-          อัปโหลดไฟล์ <strong>Errcode_CSOP_*.xlsx</strong> (ไฟล์จริงจากกรมบัญชีกลาง — 2 คอลัมน์: <strong>Errcode | Errdesc</strong>) —
-          ระบบจะแทนข้อมูลเดิมทั้งหมดด้วย list ใหม่ (replace mode)
+          อัปโหลดไฟล์ <strong>error_csop</strong> (ไฟล์จริงจากกรมบัญชีกลาง — 2 คอลัมน์: <strong>Errcode | Errdesc</strong>) —
+          รหัสที่มีอยู่แล้วในตารางจะถูก<strong>ข้าม</strong> ส่วนรหัสที่ยังไม่มีจะถูกเพิ่มเข้าไปใหม่
         </p>
 
         {errorCodesCount !== null && (
@@ -594,7 +602,7 @@ export default function ClaimDbConfigPage() {
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-primary-500 to-primary-700 rounded-2xl hover:from-primary-600 hover:to-primary-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-soft"
           >
             {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            เลือกไฟล์ Errcode_CSOP_*.xlsx
+            เลือกไฟล์ error_csop
           </button>
           {!csopTablesStatus?.csop_error && (
             <span className="text-xs text-amber-600">ต้องสร้างตาราง csop_error ก่อน (กดปุ่ม "สร้างตาราง" ด้านบน)</span>

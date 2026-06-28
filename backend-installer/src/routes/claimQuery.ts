@@ -1084,7 +1084,7 @@ export async function claimQueryRoutes(app: FastifyInstance) {
     }
   });
 
-  /** POST /api/claim-db/csop-error-codes/seed — bulk upsert (เหมือน eclaim-error-codes/seed แต่ใช้ตาราง csop_error) */
+  /** POST /api/claim-db/csop-error-codes/seed — เพิ่มเฉพาะรหัสที่ยังไม่มีในตาราง (รหัสที่มีอยู่แล้ว → ข้าม ไม่แก้ทับ) */
   app.post('/claim-db/csop-error-codes/seed', async (request, reply) => {
     const auth = request.auth!;
     if (auth.role !== 'admin') {
@@ -1094,37 +1094,34 @@ export async function claimQueryRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BadRequest', issues: parsed.error.issues });
     }
-    // ไฟล์ต้นทางอาจมีรหัสซ้ำกัน (เก็บแค่รายการล่าสุดของแต่ละ code) กัน ON CONFLICT ชนกันเองในชุดเดียวกัน
-    const dedupedRows = [...new Map(parsed.data.rows.map((r) => [r.code, r])).values()];
-    const { replace } = parsed.data;
-    const rows = dedupedRows;
+    // ไฟล์ต้นทางอาจมีรหัสซ้ำกัน (เก็บแค่รายการล่าสุดของแต่ละ code) กัน insert ชนกันเองในชุดเดียวกัน
+    const rows = [...new Map(parsed.data.rows.map((r) => [r.code, r])).values()];
 
     let pool: CachedPool;
     try { pool = await openClaimPool(auth.hospitalId); }
     catch (err) { return reply.code(412).send({ error: 'ClaimDbNotConfigured', message: err instanceof Error ? err.message : String(err) }); }
 
     try {
-      if (replace) {
-        await runQuery(pool, 'DELETE FROM csop_error');
+      // หารหัสที่มีอยู่แล้วในตาราง — เช็คเป็นชุด (chunk) กันคำสั่ง IN (...) ยาวเกิน
+      const existing = new Set<string>();
+      const checkChunkSize = 500;
+      for (let i = 0; i < rows.length; i += checkChunkSize) {
+        const codes = rows.slice(i, i + checkChunkSize).map((r) => sqlValueOrNull(r.code)).join(', ');
+        const r = await runQuery(pool, `SELECT code FROM csop_error WHERE code IN (${codes})`);
+        for (const row of r.rows) existing.add(String(row.code));
       }
 
-      const chunkSize = 200;
-      let upserted = 0;
-      for (let i = 0; i < rows.length; i += chunkSize) {
-        const chunk = rows.slice(i, i + chunkSize);
+      const newRows = rows.filter((r) => !existing.has(r.code));
+      const insertChunkSize = 200;
+      for (let i = 0; i < newRows.length; i += insertChunkSize) {
+        const chunk = newRows.slice(i, i + insertChunkSize);
         const values = chunk
           .map((r) => `(${sqlValueOrNull(r.code)}, ${sqlValueOrNull(r.description)}, ${sqlValueOrNull(r.resolution)})`)
           .join(', ');
-
-        const sql = pool.type === 'postgresql'
-          ? `INSERT INTO csop_error (code, description, resolution) VALUES ${values} ` +
-            `ON CONFLICT (code) DO UPDATE SET description = EXCLUDED.description, resolution = EXCLUDED.resolution, updated_at = NOW()`
-          : `INSERT INTO csop_error (code, description, resolution) VALUES ${values} ` +
-            `ON DUPLICATE KEY UPDATE description = VALUES(description), resolution = VALUES(resolution), updated_at = CURRENT_TIMESTAMP`;
-        await runQuery(pool, sql);
-        upserted += chunk.length;
+        await runQuery(pool, `INSERT INTO csop_error (code, description, resolution) VALUES ${values}`);
       }
-      return { ok: true, upserted, replaced: replace };
+
+      return { ok: true, inserted: newRows.length, skipped: rows.length - newRows.length };
     } catch (err) {
       return reply.code(500).send({ error: 'SeedFailed', message: err instanceof Error ? err.message : String(err) });
     } finally {

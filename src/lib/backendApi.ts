@@ -790,13 +790,13 @@ export async function listCsopErrorCodes(): Promise<{ codes: EclaimErrorCode[]; 
   return res.data;
 }
 
+/** เพิ่มเฉพาะรหัสที่ยังไม่มีในตาราง csop_error — รหัสที่มีอยู่แล้วจะถูกข้าม ไม่แก้ทับ */
 export async function seedCsopErrorCodes(
   rows: EclaimErrorCode[],
-  replace = false,
-): Promise<{ ok: boolean; upserted: number; replaced: boolean }> {
-  const res = await getBackend().post<{ ok: boolean; upserted: number; replaced: boolean }>(
+): Promise<{ ok: boolean; inserted: number; skipped: number }> {
+  const res = await getBackend().post<{ ok: boolean; inserted: number; skipped: number }>(
     '/claim-db/csop-error-codes/seed',
-    { rows, replace },
+    { rows, replace: false },
   );
   return res.data;
 }
